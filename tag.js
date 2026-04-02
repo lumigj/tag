@@ -1,22 +1,11 @@
 // @flow
-input.onButtonPressed(Button.A, function () {
-    trackingMode = 2
-    showMode()
-})
-input.onButtonPressed(Button.AB, function () {
-    showMode()
-})
-input.onButtonPressed(Button.B, function () {
-    trackingMode = 3
-    showMode()
-})
 radio.onReceivedNumber(function (receivedNumber) {
     if (receivedNumber != 1 && receivedNumber != 2 && receivedNumber != 3) {
         return
     }
     updateBeaconRssi(receivedNumber, radio.receivedPacket(RadioPacketProperty.SignalStrength))
 })
-function updateBeaconRssi(beaconId: number, rssi: number) {
+function updateBeaconRssi (beaconId: number, rssi: number) {
     if (beaconId == 1) {
         rawRssi1 = rssi
         lastSeen1 = input.runningTime()
@@ -30,14 +19,18 @@ function updateBeaconRssi(beaconId: number, rssi: number) {
     rawRssi3 = rssi
     lastSeen3 = input.runningTime()
 }
-function hasFreshFix() {
+function hasFreshFix () {
     now = input.runningTime()
     if (trackingMode == 3) {
         return lastSeen1 > 0 && lastSeen2 > 0 && lastSeen3 > 0 && now - lastSeen1 <= BEACON_TIMEOUT_MS && now - lastSeen2 <= BEACON_TIMEOUT_MS && now - lastSeen3 <= BEACON_TIMEOUT_MS
     }
     return lastSeen1 > 0 && lastSeen2 > 0 && now - lastSeen1 <= BEACON_TIMEOUT_MS && now - lastSeen2 <= BEACON_TIMEOUT_MS
 }
-function showMode() {
+input.onButtonPressed(Button.A, function () {
+    trackingMode = 2
+    showMode()
+})
+function showMode () {
     basic.clearScreen()
     if (trackingMode == 3) {
         basic.showString("123")
@@ -45,14 +38,21 @@ function showMode() {
         basic.showString("12")
     }
 }
-let trackingMode = 0
+input.onButtonPressed(Button.AB, function () {
+    showMode()
+})
+input.onButtonPressed(Button.B, function () {
+    trackingMode = 3
+    showMode()
+})
 let now = 0
-let rawRssi3 = 0
-let rawRssi2 = 0
-let rawRssi1 = 0
 let lastSeen3 = 0
 let lastSeen2 = 0
 let lastSeen1 = 0
+let trackingMode = 0
+let rawRssi3 = 0
+let rawRssi2 = 0
+let rawRssi1 = 0
 let BEACON_TIMEOUT_MS = 0
 let GROUP = 23
 BEACON_TIMEOUT_MS = 700
