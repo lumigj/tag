@@ -26,35 +26,55 @@ function hasFreshFix () {
     }
     return lastSeen1 > 0 && lastSeen2 > 0 && now - lastSeen1 <= BEACON_TIMEOUT_MS && now - lastSeen2 <= BEACON_TIMEOUT_MS
 }
-input.onButtonPressed(Button.A, function () {
-    trackingMode = 2
-    showMode()
-})
-function showMode () {
+function drawModeIndicator () {
     basic.clearScreen()
     if (trackingMode == 3) {
-        basic.showString("123")
+        led.plot(1, 0)
+        led.plot(2, 0)
+        led.plot(3, 0)
+        led.plot(3, 1)
+        led.plot(2, 2)
+        led.plot(3, 2)
+        led.plot(3, 3)
+        led.plot(1, 4)
+        led.plot(2, 4)
+        led.plot(3, 4)
     } else {
-        basic.showString("12")
+        led.plot(1, 0)
+        led.plot(2, 0)
+        led.plot(3, 0)
+        led.plot(3, 1)
+        led.plot(2, 2)
+        led.plot(1, 3)
+        led.plot(1, 4)
+        led.plot(2, 4)
+        led.plot(3, 4)
     }
 }
+input.onButtonPressed(Button.A, function () {
+    trackingMode = 2
+    modeDisplayUntil = input.runningTime() + MODE_DISPLAY_MS
+})
 input.onButtonPressed(Button.AB, function () {
-    showMode()
+    modeDisplayUntil = input.runningTime() + MODE_DISPLAY_MS
 })
 input.onButtonPressed(Button.B, function () {
     trackingMode = 3
-    showMode()
+    modeDisplayUntil = input.runningTime() + MODE_DISPLAY_MS
 })
 let now = 0
 let lastSeen3 = 0
 let lastSeen2 = 0
 let lastSeen1 = 0
+let modeDisplayUntil = 0
 let trackingMode = 0
 let rawRssi3 = 0
 let rawRssi2 = 0
 let rawRssi1 = 0
 let BEACON_TIMEOUT_MS = 0
+let MODE_DISPLAY_MS = 0
 let GROUP = 23
+MODE_DISPLAY_MS = 900
 BEACON_TIMEOUT_MS = 700
 let SEND_INTERVAL_MS = 180
 rawRssi1 = -95
@@ -64,19 +84,26 @@ trackingMode = 2
 radio.setGroup(GROUP)
 radio.setFrequencyBand(11)
 radio.setTransmitPower(7)
-showMode()
+modeDisplayUntil = input.runningTime() + MODE_DISPLAY_MS
 basic.forever(function () {
     if (hasFreshFix()) {
+        if (trackingMode == 3) {
+            radio.sendString("T|3|" + rawRssi1 + "|" + rawRssi2 + "|" + rawRssi3)
+        } else {
+            radio.sendString("T|2|" + rawRssi1 + "|" + rawRssi2)
+        }
+    }
+    if (input.runningTime() < modeDisplayUntil) {
+        drawModeIndicator()
+    } else if (hasFreshFix()) {
         basic.clearScreen()
         if (trackingMode == 3) {
             led.plot(2, 0)
             led.plot(0, 4)
             led.plot(4, 4)
-            radio.sendString("T|3|" + rawRssi1 + "|" + rawRssi2 + "|" + rawRssi3)
         } else {
             led.plot(1, 2)
             led.plot(3, 2)
-            radio.sendString("T|2|" + rawRssi1 + "|" + rawRssi2)
         }
     } else {
         basic.clearScreen()
