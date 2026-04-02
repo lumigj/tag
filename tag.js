@@ -1,82 +1,45 @@
 // @flow
-function rssiToScore (rssi: number) {
-    return clamp(rssi - RSSI_MIN + 1, 1, RSSI_MAX - RSSI_MIN + 1)
-}
-function clamp (value: number, low: number, high: number) {
-    if (value < low) {
-        return low
-    }
-    if (value > high) {
-        return high
-    }
-    return value
-}
 radio.onReceivedNumber(function (receivedNumber) {
     if (receivedNumber != 1 && receivedNumber != 2) {
         return
     }
     updateBeaconRssi(receivedNumber, radio.receivedPacket(RadioPacketProperty.SignalStrength))
 })
-function updateBeaconRssi (beaconId: number, rssi: number) {
+function updateBeaconRssi(beaconId: number, rssi: number) {
     if (beaconId == 1) {
-        if (lastSeen1 == 0) {
-            smoothedRssi1 = rssi
-        } else {
-            smoothedRssi1 = Math.round((smoothedRssi1 * 3 + rssi) / 4)
-        }
+        rawRssi1 = rssi
         lastSeen1 = input.runningTime()
         return
     }
     if (beaconId == 2) {
-        if (lastSeen2 == 0) {
-            smoothedRssi2 = rssi
-        } else {
-            smoothedRssi2 = Math.round((smoothedRssi2 * 3 + rssi) / 4)
-        }
+        rawRssi2 = rssi
         lastSeen2 = input.runningTime()
     }
 }
-function hasFreshFix () {
+function hasFreshFix() {
     now = input.runningTime()
     return lastSeen1 > 0 && lastSeen2 > 0 && now - lastSeen1 <= BEACON_TIMEOUT_MS && now - lastSeen2 <= BEACON_TIMEOUT_MS
 }
-let signalConfidence = 0
-let score2 = 0
-let score1 = 0
 let now = 0
-let smoothedRssi2 = 0
-let smoothedRssi1 = 0
+let rawRssi2 = 0
+let rawRssi1 = 0
 let lastSeen2 = 0
 let lastSeen1 = 0
-let RSSI_MAX = 0
-let RSSI_MIN = 0
 let BEACON_TIMEOUT_MS = 0
 let GROUP = 23
 BEACON_TIMEOUT_MS = 700
 let SEND_INTERVAL_MS = 180
-RSSI_MIN = -95
-RSSI_MAX = -40
-lastSeen1 = 0
-lastSeen2 = 0
-smoothedRssi1 = RSSI_MIN
-smoothedRssi2 = RSSI_MIN
-let positionPercent = 50
+rawRssi1 = -95
+rawRssi2 = -95
 radio.setGroup(GROUP)
 radio.setFrequencyBand(11)
 radio.setTransmitPower(7)
 basic.showIcon(IconNames.SmallDiamond)
 basic.forever(function () {
     if (hasFreshFix()) {
-        score1 = rssiToScore(smoothedRssi1)
-        score2 = rssiToScore(smoothedRssi2)
-        positionPercent = Math.round(score2 * 100 / (score1 + score2))
-        signalConfidence = Math.round((score1 + score2) * 100 / ((RSSI_MAX - RSSI_MIN + 1) * 2))
-        signalConfidence = clamp(signalConfidence, 0, 100)
-        radio.sendString("T|" + positionPercent + "|" + smoothedRssi1 + "|" + smoothedRssi2)
-        led.plotBarGraph(
-            positionPercent,
-            100
-        )
+        basic.clearScreen()
+        led.plot(2, 2)
+        radio.sendString("T|" + rawRssi1 + "|" + rawRssi2)
     } else {
         basic.clearScreen()
         led.plot(0, 4)
