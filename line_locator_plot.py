@@ -18,30 +18,34 @@ from serial.tools import list_ports
 
 RSSI_MIN = -95
 RSSI_MAX = -40
-MIN_CALIBRATION_SPAN = 6
+MIN_CALIBRATION_SPAN = 4
+LINE_COORDS = {
+    "B1": (0.10, 0.12),
+    "B2": (0.90, 0.12),
+}
+TRIANGLE_COORDS = {
+    "B1": (0.50, 0.90),
+    "B2": (0.10, 0.12),
+    "B3": (0.90, 0.12),
+}
 
 
 @dataclass
 class TagSample:
     timestamp: float
+    mode: int
     rssi1: int
     rssi2: int
-
-    @property
-    def delta(self) -> int:
-        return self.rssi2 - self.rssi1
+    rssi3: int | None
 
 
 @dataclass
 class CalibrationPoint:
     label: str
-    target_percent: float
+    mode: int
     rssi1: int
     rssi2: int
-
-    @property
-    def delta(self) -> int:
-        return self.rssi2 - self.rssi1
+    rssi3: int | None
 
 
 def clamp(value: float, low: float, high: float) -> float:
@@ -52,72 +56,16 @@ def clamp(value: float, low: float, high: float) -> float:
     return value
 
 
-def rssi_to_score(rssi: int) -> int:
-    return int(clamp(rssi - RSSI_MIN + 1, 1, RSSI_MAX - RSSI_MIN + 1))
+def rssi_to_score(rssi: int) -> float:
+    return clamp(rssi - RSSI_MIN + 1, 1, RSSI_MAX - RSSI_MIN + 1)
 
 
-def estimate_raw_position(sample: TagSample) -> float:
-    score1 = rssi_to_score(sample.rssi1)
-    score2 = rssi_to_score(sample.rssi2)
-    return float(round(score2 * 100 / (score1 + score2), 1))
-
-
-def interpolate_percent(delta: int, point1: CalibrationPoint, point2: CalibrationPoint) -> float | None:
-    span = point2.delta - point1.delta
-    if abs(span) < MIN_CALIBRATION_SPAN:
-        return None
-
-    percent = point1.target_percent + (delta - point1.delta) * (
-        point2.target_percent - point1.target_percent
-    ) / span
-    return round(clamp(percent, 0, 100), 1)
-
-
-def has_usable_ab(calibration: dict[str, CalibrationPoint | None]) -> bool:
-    point_a = calibration["A"]
-    point_b = calibration["B"]
-    return (
-        point_a is not None
-        and point_b is not None
-        and abs(point_b.delta - point_a.delta) >= MIN_CALIBRATION_SPAN
-    )
-
-
-def has_usable_c(calibration: dict[str, CalibrationPoint | None]) -> bool:
-    point_a = calibration["A"]
-    point_b = calibration["B"]
-    point_c = calibration["C"]
-    if point_a is None or point_b is None or point_c is None:
-        return False
-
-    lower = min(point_a.delta, point_b.delta)
-    upper = max(point_a.delta, point_b.delta)
-    return lower < point_c.delta < upper
-
-
-def estimate_position(
-    sample: TagSample,
-    calibration: dict[str, CalibrationPoint | None],
-) -> tuple[float, str]:
-    point_a = calibration["A"]
-    point_b = calibration["B"]
-    point_c = calibration["C"]
-
-    if has_usable_ab(calibration):
-        if has_usable_c(calibration) and point_a is not None and point_b is not None and point_c is not None:
-            if (sample.delta - point_c.delta) * (point_a.delta - point_c.delta) >= 0:
-                position = interpolate_percent(sample.delta, point_a, point_c)
-            else:
-                position = interpolate_percent(sample.delta, point_c, point_b)
-            if position is not None:
-                return position, "CAL-ABC"
-
-        if point_a is not None and point_b is not None:
-            position = interpolate_percent(sample.delta, point_a, point_b)
-            if position is not None:
-                return position, "CAL-AB"
-
-    return estimate_raw_position(sample), "RAW"
+def rssi_for_label(sample: TagSample | CalibrationPoint, label: str) -> int | None:
+    if label == "B1":
+        return sample.rssi1
+    if label == "B2":
+        return sample.rssi2
+    return sample.rssi3
 
 
 def parse_sample(line: str) -> TagSample | None:
@@ -129,20 +77,34 @@ def parse_sample(line: str) -> TagSample | None:
         if len(parts) == 3:
             return TagSample(
                 timestamp=time.time(),
+                mode=2,
                 rssi1=int(parts[1]),
                 rssi2=int(parts[2]),
+                rssi3=None,
             )
-        if len(parts) == 4:
+        if len(parts) == 4 and parts[1] in {"2", "L"}:
             return TagSample(
                 timestamp=time.time(),
+                mode=2,
                 rssi1=int(parts[2]),
                 rssi2=int(parts[3]),
+                rssi3=None,
+            )
+        if len(parts) == 5 and parts[1] in {"3", "T"}:
+            return TagSample(
+                timestamp=time.time(),
+                mode=3,
+                rssi1=int(parts[2]),
+                rssi2=int(parts[3]),
+                rssi3=int(parts[4]),
             )
         if len(parts) >= 7:
             return TagSample(
                 timestamp=time.time(),
+                mode=2,
                 rssi1=int(parts[2]),
                 rssi2=int(parts[3]),
+                rssi3=None,
             )
     except ValueError:
         return None
@@ -189,7 +151,7 @@ def select_port(explicit_port: str | None) -> str:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Live line visualization for 2-beacon micro:bit RSSI tracking."
+        description="Live line/triangle visualization for micro:bit RSSI tracking."
     )
     parser.add_argument("port_arg", nargs="?", help="Optional serial port, e.g. /dev/ttyACM0")
     parser.add_argument("--port", help="Serial port for the receiver micro:bit, e.g. /dev/ttyACM0")
@@ -224,18 +186,184 @@ def read_samples_forever(
         sample_queue.put(sample)
 
 
-def point_summary(point: CalibrationPoint | None) -> str:
+def capture_point(latest_sample: TagSample | None, label: str) -> CalibrationPoint | None:
+    if latest_sample is None:
+        return None
+    if label == "B3" and latest_sample.mode != 3:
+        return None
+    return CalibrationPoint(
+        label=label,
+        mode=latest_sample.mode,
+        rssi1=latest_sample.rssi1,
+        rssi2=latest_sample.rssi2,
+        rssi3=latest_sample.rssi3,
+    )
+
+
+def calibration_summary(point: CalibrationPoint | None, label: str) -> str:
     if point is None:
         return "--"
-    return f"{point.delta}"
+    value = rssi_for_label(point, label)
+    if value is None:
+        return "--"
+    return str(value)
 
 
-def mode_color(mode: str) -> str:
-    if mode == "CAL-ABC":
-        return "#2a9d8f"
-    if mode == "CAL-AB":
-        return "#e9c46a"
-    return "#457b9d"
+def raw_line_position(sample: TagSample) -> tuple[float, float]:
+    score1 = rssi_to_score(sample.rssi1)
+    score2 = rssi_to_score(sample.rssi2)
+    total = score1 + score2
+    if total <= 0:
+        return 0.50, LINE_COORDS["B1"][1]
+    x = LINE_COORDS["B1"][0] + (LINE_COORDS["B2"][0] - LINE_COORDS["B1"][0]) * (score2 / total)
+    return round(x, 4), LINE_COORDS["B1"][1]
+
+
+def raw_triangle_position(sample: TagSample) -> tuple[float, float]:
+    score1 = rssi_to_score(sample.rssi1)
+    score2 = rssi_to_score(sample.rssi2)
+    score3 = rssi_to_score(sample.rssi3 if sample.rssi3 is not None else RSSI_MIN)
+    total = score1 + score2 + score3
+    if total <= 0:
+        return TRIANGLE_COORDS["B1"]
+    x = (
+        TRIANGLE_COORDS["B1"][0] * score1
+        + TRIANGLE_COORDS["B2"][0] * score2
+        + TRIANGLE_COORDS["B3"][0] * score3
+    ) / total
+    y = (
+        TRIANGLE_COORDS["B1"][1] * score1
+        + TRIANGLE_COORDS["B2"][1] * score2
+        + TRIANGLE_COORDS["B3"][1] * score3
+    ) / total
+    return round(x, 4), round(y, 4)
+
+
+def calibrated_strength(sample: TagSample, calibration: dict[str, CalibrationPoint | None], label: str) -> float | None:
+    point = calibration[label]
+    if point is None:
+        return None
+
+    current = rssi_for_label(sample, label)
+    near = rssi_for_label(point, label)
+    if current is None or near is None:
+        return None
+
+    far_values = []
+    for other_label, other_point in calibration.items():
+        if other_label == label or other_point is None:
+            continue
+        other_value = rssi_for_label(other_point, label)
+        if other_value is not None:
+            far_values.append(other_value)
+
+    if far_values:
+        far = sum(far_values) / len(far_values)
+    else:
+        far = RSSI_MIN
+
+    span = near - far
+    if span < MIN_CALIBRATION_SPAN:
+        return None
+
+    return clamp((current - far) / span, 0.0, 1.0)
+
+
+def calibrated_line_position(
+    sample: TagSample,
+    calibration: dict[str, CalibrationPoint | None],
+) -> tuple[float, float] | None:
+    strength1 = calibrated_strength(sample, calibration, "B1")
+    strength2 = calibrated_strength(sample, calibration, "B2")
+    if strength1 is None or strength2 is None or strength1 + strength2 <= 0:
+        return None
+
+    ratio = strength2 / (strength1 + strength2)
+    x = LINE_COORDS["B1"][0] + (LINE_COORDS["B2"][0] - LINE_COORDS["B1"][0]) * ratio
+    return round(x, 4), LINE_COORDS["B1"][1]
+
+
+def calibrated_triangle_position(
+    sample: TagSample,
+    calibration: dict[str, CalibrationPoint | None],
+) -> tuple[float, float] | None:
+    strength1 = calibrated_strength(sample, calibration, "B1")
+    strength2 = calibrated_strength(sample, calibration, "B2")
+    strength3 = calibrated_strength(sample, calibration, "B3")
+    if (
+        strength1 is None
+        or strength2 is None
+        or strength3 is None
+        or strength1 + strength2 + strength3 <= 0
+    ):
+        return None
+
+    total = strength1 + strength2 + strength3
+    x = (
+        TRIANGLE_COORDS["B1"][0] * strength1
+        + TRIANGLE_COORDS["B2"][0] * strength2
+        + TRIANGLE_COORDS["B3"][0] * strength3
+    ) / total
+    y = (
+        TRIANGLE_COORDS["B1"][1] * strength1
+        + TRIANGLE_COORDS["B2"][1] * strength2
+        + TRIANGLE_COORDS["B3"][1] * strength3
+    ) / total
+    return round(x, 4), round(y, 4)
+
+
+def estimate_position(
+    sample: TagSample,
+    calibration: dict[str, CalibrationPoint | None],
+) -> tuple[float, float, str]:
+    if sample.mode == 3:
+        calibrated = calibrated_triangle_position(sample, calibration)
+        if calibrated is not None:
+            return calibrated[0], calibrated[1], "CAL-B123"
+        raw = raw_triangle_position(sample)
+        return raw[0], raw[1], "RAW-B123"
+
+    calibrated = calibrated_line_position(sample, calibration)
+    if calibrated is not None:
+        return calibrated[0], calibrated[1], "CAL-B12"
+    raw = raw_line_position(sample)
+    return raw[0], raw[1], "RAW-B12"
+
+
+def update_layout(
+    mode: int,
+    line_artists: list,
+    beacon_scatter,
+    beacon_labels: dict[str, any],
+    ax,
+) -> None:
+    for line in line_artists:
+        line.set_data([], [])
+
+    if mode == 3:
+        coords = TRIANGLE_COORDS
+        line_artists[0].set_data([coords["B1"][0], coords["B2"][0]], [coords["B1"][1], coords["B2"][1]])
+        line_artists[1].set_data([coords["B1"][0], coords["B3"][0]], [coords["B1"][1], coords["B3"][1]])
+        line_artists[2].set_data([coords["B2"][0], coords["B3"][0]], [coords["B2"][1], coords["B3"][1]])
+        ordered = ["B1", "B2", "B3"]
+        ax.set_title("Triangle Mode: raw/calibrated B1-B2-B3 RSSI")
+    else:
+        coords = LINE_COORDS
+        line_artists[0].set_data([coords["B1"][0], coords["B2"][0]], [coords["B1"][1], coords["B2"][1]])
+        ordered = ["B1", "B2"]
+        ax.set_title("Line Mode: raw/calibrated B1-B2 RSSI")
+
+    beacon_scatter.set_offsets([coords[label] for label in ordered])
+    beacon_scatter.set_sizes([300] * len(ordered))
+    beacon_scatter.set_color(["#1d3557"] * len(ordered))
+
+    for label, text in beacon_labels.items():
+        if label in ordered:
+            x, y = coords[label]
+            text.set_position((x, y + 0.07))
+            text.set_visible(True)
+        else:
+            text.set_visible(False)
 
 
 def main() -> int:
@@ -244,13 +372,16 @@ def main() -> int:
     history: deque[TagSample] = deque(maxlen=args.history)
     sample_queue: SimpleQueue[TagSample] = SimpleQueue()
     latest_sample_box: dict[str, TagSample | None] = {"sample": None}
-    calibration: dict[str, CalibrationPoint | None] = {"A": None, "B": None, "C": None}
+    calibration_by_mode: dict[int, dict[str, CalibrationPoint | None]] = {
+        2: {"B1": None, "B2": None, "B3": None},
+        3: {"B1": None, "B2": None, "B3": None},
+    }
 
     csv_file = None
     if args.save:
         csv_file = args.save.open("a", encoding="utf-8")
         if args.save.stat().st_size == 0:
-            csv_file.write("timestamp,rssi1,rssi2,delta\n")
+            csv_file.write("timestamp,mode,rssi1,rssi2,rssi3\n")
             csv_file.flush()
 
     serial_conn = Serial(port, args.baud, timeout=1)
@@ -263,25 +394,31 @@ def main() -> int:
     )
     reader_thread.start()
 
-    fig, ax = plt.subplots(figsize=(10, 3.8))
-    fig.subplots_adjust(bottom=0.28)
-    fig.canvas.manager.set_window_title("micro:bit line locator")
-    ax.set_xlim(-0.05, 1.05)
-    ax.set_ylim(-0.45, 0.45)
+    fig, ax = plt.subplots(figsize=(10, 5.4))
+    fig.subplots_adjust(bottom=0.26)
+    fig.canvas.manager.set_window_title("micro:bit locator")
+    ax.set_xlim(0.0, 1.0)
+    ax.set_ylim(0.0, 1.0)
+    ax.set_xticks([])
     ax.set_yticks([])
-    ax.set_xticks([0, 0.5, 1.0])
-    ax.set_xticklabels(["Beacon 1", "Midpoint", "Beacon 2"])
-    ax.set_title("Relative tag position from raw dual-beacon RSSI")
-    ax.hlines(0, 0, 1, color="#264653", linewidth=3, zorder=1)
-    ax.scatter([0, 1], [0, 0], s=300, marker="s", c=["#1d3557", "#1d3557"], zorder=3)
-    ax.text(0, 0.14, "B1", ha="center", va="bottom", fontsize=11, weight="bold")
-    ax.text(1, 0.14, "B2", ha="center", va="bottom", fontsize=11, weight="bold")
+    ax.set_aspect("equal")
 
+    line_artists = [
+        ax.plot([], [], color="#264653", linewidth=3, zorder=1)[0],
+        ax.plot([], [], color="#264653", linewidth=3, zorder=1)[0],
+        ax.plot([], [], color="#264653", linewidth=3, zorder=1)[0],
+    ]
+    beacon_scatter = ax.scatter([], [], s=[], c=[], marker="s", zorder=3)
+    beacon_labels = {
+        "B1": ax.text(0, 0, "B1", ha="center", va="bottom", fontsize=11, weight="bold"),
+        "B2": ax.text(0, 0, "B2", ha="center", va="bottom", fontsize=11, weight="bold"),
+        "B3": ax.text(0, 0, "B3", ha="center", va="bottom", fontsize=11, weight="bold"),
+    }
     trail_scatter = ax.scatter([], [], s=[], c=[], alpha=0.35, zorder=2)
-    current_scatter = ax.scatter([0.5], [0], s=[260], c=["#adb5bd"], edgecolors="black", zorder=4)
+    current_scatter = ax.scatter([0.5], [0.12], s=[280], c=["#adb5bd"], edgecolors="black", zorder=4)
     info_text = ax.text(
         0.02,
-        0.94,
+        0.97,
         "Waiting for tag data...",
         transform=ax.transAxes,
         ha="left",
@@ -291,34 +428,28 @@ def main() -> int:
         bbox={"boxstyle": "round,pad=0.3", "facecolor": "white", "edgecolor": "#adb5bd"},
     )
 
-    button_a = Button(fig.add_axes([0.14, 0.07, 0.16, 0.09]), "Cal A")
-    button_b = Button(fig.add_axes([0.34, 0.07, 0.16, 0.09]), "Cal B")
-    button_c = Button(fig.add_axes([0.54, 0.07, 0.16, 0.09]), "Cal C")
+    button_b1 = Button(fig.add_axes([0.10, 0.08, 0.18, 0.08]), "Cal B1")
+    button_b2 = Button(fig.add_axes([0.32, 0.08, 0.18, 0.08]), "Cal B2")
+    button_b3 = Button(fig.add_axes([0.54, 0.08, 0.18, 0.08]), "Cal B3")
 
     def capture_calibration(label: str) -> None:
-        sample = latest_sample_box["sample"]
-        if sample is None:
+        latest_sample = latest_sample_box["sample"]
+        point = capture_point(latest_sample, label)
+        if point is None:
             return
-
-        target_percent = 0.0
-        if label == "B":
-            target_percent = 100.0
-        elif label == "C":
-            target_percent = 50.0
-
-        calibration[label] = CalibrationPoint(
-            label=label,
-            target_percent=target_percent,
-            rssi1=sample.rssi1,
-            rssi2=sample.rssi2,
-        )
+        calibration_by_mode[point.mode][label] = point
         fig.canvas.draw_idle()
 
-    button_a.on_clicked(lambda _event: capture_calibration("A"))
-    button_b.on_clicked(lambda _event: capture_calibration("B"))
-    button_c.on_clicked(lambda _event: capture_calibration("C"))
+    button_b1.on_clicked(lambda _event: capture_calibration("B1"))
+    button_b2.on_clicked(lambda _event: capture_calibration("B2"))
+    button_b3.on_clicked(lambda _event: capture_calibration("B3"))
+
+    current_mode = 2
+    update_layout(current_mode, line_artists, beacon_scatter, beacon_labels, ax)
 
     def update(_frame: int):
+        nonlocal current_mode
+
         while True:
             try:
                 sample = sample_queue.get_nowait()
@@ -329,48 +460,60 @@ def main() -> int:
             latest_sample_box["sample"] = sample
             if csv_file is not None:
                 csv_file.write(
-                    f"{sample.timestamp},{sample.rssi1},{sample.rssi2},{sample.delta}\n"
+                    f"{sample.timestamp},{sample.mode},{sample.rssi1},{sample.rssi2},{sample.rssi3}\n"
                 )
                 csv_file.flush()
 
         if not history:
             return current_scatter, trail_scatter, info_text
 
-        positions = [estimate_position(sample, calibration) for sample in history]
         latest = history[-1]
-        latest_position, latest_mode = positions[-1]
+        if latest.mode != current_mode:
+            current_mode = latest.mode
+            update_layout(current_mode, line_artists, beacon_scatter, beacon_labels, ax)
 
-        if len(history) > 1:
-            trail_offsets = [[position[0] / 100.0, 0] for position in positions[:-1]]
-            trail_sizes = [60 + index * 6 for index, _ in enumerate(positions[:-1])]
-            trail_colors = [mode_color(position[1]) for position in positions[:-1]]
-            trail_scatter.set_offsets(trail_offsets)
-            trail_scatter.set_sizes(trail_sizes)
-            trail_scatter.set_color(trail_colors)
+        current_calibration = calibration_by_mode[current_mode]
+        positions = [estimate_position(sample, current_calibration) for sample in history if sample.mode == current_mode]
+        mode_history = [sample for sample in history if sample.mode == current_mode]
+        if not positions or not mode_history:
+            return current_scatter, trail_scatter, info_text
+
+        latest_position = positions[-1]
+        latest_sample = mode_history[-1]
+
+        if len(positions) > 1:
+            trail_scatter.set_offsets([[point[0], point[1]] for point in positions[:-1]])
+            trail_scatter.set_sizes([60 + index * 6 for index, _ in enumerate(positions[:-1])])
+            trail_scatter.set_color(["#94a3b8"] * len(positions[:-1]))
         else:
-            trail_scatter.set_offsets([[-1, 0]])
+            trail_scatter.set_offsets([[-1, -1]])
             trail_scatter.set_sizes([0])
             trail_scatter.set_color(["#ffffff"])
 
-        current_scatter.set_offsets([[latest_position / 100.0, 0]])
-        current_scatter.set_sizes([280])
-        current_scatter.set_color([mode_color(latest_mode)])
+        current_scatter.set_offsets([[latest_position[0], latest_position[1]]])
+        current_scatter.set_sizes([300])
+        if latest_position[2].startswith("CAL"):
+            current_scatter.set_color(["#2a9d8f"])
+        else:
+            current_scatter.set_color(["#457b9d"])
 
         info_text.set_text(
-            "mode     = {:>7}\n"
-            "position = {:>5.1f}%\n"
-            "rssi1    = {:>5}\n"
-            "rssi2    = {:>5}\n"
-            "delta    = {:>5}\n"
-            "cal A/B/C= {:>3} {:>3} {:>3}".format(
-                latest_mode,
-                latest_position,
-                latest.rssi1,
-                latest.rssi2,
-                latest.delta,
-                point_summary(calibration["A"]),
-                point_summary(calibration["B"]),
-                point_summary(calibration["C"]),
+            "tag mode = {:>8}\n"
+            "estimate = {:>8}\n"
+            "rssi B1  = {:>5}\n"
+            "rssi B2  = {:>5}\n"
+            "rssi B3  = {:>5}\n"
+            "cal B1   = {:>5}\n"
+            "cal B2   = {:>5}\n"
+            "cal B3   = {:>5}".format(
+                "TRIANGLE" if current_mode == 3 else "LINE",
+                latest_position[2],
+                latest_sample.rssi1,
+                latest_sample.rssi2,
+                "--" if latest_sample.rssi3 is None else latest_sample.rssi3,
+                calibration_summary(current_calibration["B1"], "B1"),
+                calibration_summary(current_calibration["B2"], "B2"),
+                calibration_summary(current_calibration["B3"], "B3"),
             )
         )
         return current_scatter, trail_scatter, info_text
