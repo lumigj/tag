@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import argparse
+import sys
+import threading
 import time
 from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
+from queue import Empty, SimpleQueue
 
 import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
@@ -16,11 +19,11 @@ from serial.tools import list_ports
 class TagSample:
     timestamp: float
     position_percent: float
-    rssi1: int
-    rssi2: int
-    score1: int
-    score2: int
-    confidence: int
+    rssi1: int | None
+    rssi2: int | None
+    score1: int | None
+    score2: int | None
+    confidence: int | None
 
     @property
     def x(self) -> float:
@@ -28,11 +31,23 @@ class TagSample:
 
 
 def parse_sample(line: str) -> TagSample | None:
-    parts = line.strip().split("|")
-    if len(parts) != 7 or parts[0] != "T":
+    parts = line.replace("\x00", "").strip().split("|")
+    if not parts or parts[0] != "T":
         return None
 
     try:
+        if len(parts) == 4:
+            return TagSample(
+                timestamp=time.time(),
+                position_percent=float(parts[1]),
+                rssi1=int(parts[2]),
+                rssi2=int(parts[3]),
+                score1=None,
+                score2=None,
+                confidence=None,
+            )
+        if len(parts) != 7:
+            return None
         return TagSample(
             timestamp=time.time(),
             position_percent=float(parts[1]),
@@ -50,28 +65,42 @@ def select_port(explicit_port: str | None) -> str:
     if explicit_port:
         return explicit_port
 
-    ports = list(list_ports.comports())
-    if not ports:
-        raise SystemExit("No serial ports found. Connect the receiver micro:bit first.")
-    if len(ports) == 1:
-        return ports[0].device
+    if len(sys.argv) > 1 and not sys.argv[1].startswith("-"):
+        return sys.argv[1]
 
-    microbit_like = [
-        port.device
-        for port in ports
-        if "micro:bit" in port.description.lower() or "mbed" in port.description.lower()
-    ]
-    if len(microbit_like) == 1:
-        return microbit_like[0]
+    candidate_ports = []
+    for port in list_ports.comports():
+        device = port.device or ""
+        description = (port.description or "").lower()
+        hwid = (port.hwid or "").lower()
 
-    choices = "\n".join(f"- {port.device}: {port.description}" for port in ports)
+        if (
+            "arduino" in description
+            or "usb" in description
+            or "acm" in device.lower()
+            or "usb" in hwid
+        ):
+            candidate_ports.insert(0, device)
+        else:
+            candidate_ports.append(device)
+
+    for port in candidate_ports:
+        try:
+            test_serial = Serial(port=port, baudrate=9600, timeout=0.1)
+            test_serial.close()
+            return port
+        except Exception:
+            continue
+
     raise SystemExit(
-        "Multiple serial ports found. Pass --port explicitly.\n"
-        f"{choices}"
+        "No usable serial port found. Pass the port explicitly, "
+        "for example: python line_locator_plot.py /dev/ttyACM0"
     )
 
 
 def confidence_color(confidence: int) -> str:
+    if confidence is None:
+        return "#457b9d"
     if confidence >= 65:
         return "#2a9d8f"
     if confidence >= 40:
@@ -79,12 +108,19 @@ def confidence_color(confidence: int) -> str:
     return "#e76f51"
 
 
+def display_value(value: int | None) -> str:
+    if value is None:
+        return "--"
+    return str(value)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Live line visualization for 2-beacon micro:bit RSSI tracking."
     )
+    parser.add_argument("port_arg", nargs="?", help="Optional serial port, e.g. /dev/ttyACM0")
     parser.add_argument("--port", help="Serial port for the receiver micro:bit, e.g. /dev/ttyACM0")
-    parser.add_argument("--baud", type=int, default=115200, help="Serial baud rate")
+    parser.add_argument("--baud", type=int, default=9600, help="Serial baud rate")
     parser.add_argument("--history", type=int, default=20, help="Number of past points to keep on screen")
     parser.add_argument(
         "--save",
@@ -94,10 +130,32 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def read_samples_forever(
+    serial_conn: Serial,
+    sample_queue: SimpleQueue[TagSample],
+    stop_event: threading.Event,
+) -> None:
+    while not stop_event.is_set():
+        try:
+            raw = serial_conn.readline()
+        except Exception:
+            break
+
+        if not raw:
+            continue
+
+        line = raw.decode("utf-8", errors="ignore").strip()
+        sample = parse_sample(line)
+        if sample is None:
+            continue
+        sample_queue.put(sample)
+
+
 def main() -> int:
     args = build_parser().parse_args()
-    port = select_port(args.port)
+    port = select_port(args.port or args.port_arg)
     history: deque[TagSample] = deque(maxlen=args.history)
+    sample_queue: SimpleQueue[TagSample] = SimpleQueue()
 
     csv_file = None
     if args.save:
@@ -106,8 +164,15 @@ def main() -> int:
             csv_file.write("timestamp,position_percent,rssi1,rssi2,score1,score2,confidence\n")
             csv_file.flush()
 
-    serial_conn = Serial(port, args.baud, timeout=0.02)
+    serial_conn = Serial(port, args.baud, timeout=1)
     print(f"Reading receiver data from {port} at {args.baud} baud.")
+    stop_event = threading.Event()
+    reader_thread = threading.Thread(
+        target=read_samples_forever,
+        args=(serial_conn, sample_queue, stop_event),
+        daemon=True,
+    )
+    reader_thread.start()
 
     fig, ax = plt.subplots(figsize=(10, 3))
     fig.canvas.manager.set_window_title("micro:bit line locator")
@@ -138,14 +203,10 @@ def main() -> int:
 
     def update(_frame: int):
         while True:
-            raw = serial_conn.readline()
-            if not raw:
+            try:
+                sample = sample_queue.get_nowait()
+            except Empty:
                 break
-
-            line = raw.decode("utf-8", errors="ignore").strip()
-            sample = parse_sample(line)
-            if sample is None:
-                continue
 
             history.append(sample)
             if csv_file is not None:
@@ -181,13 +242,13 @@ def main() -> int:
             "rssi2    = {:>5}\n"
             "score1   = {:>5}\n"
             "score2   = {:>5}\n"
-            "conf     = {:>5}%".format(
+            "conf     = {:>5}".format(
                 latest.position_percent,
-                latest.rssi1,
-                latest.rssi2,
-                latest.score1,
-                latest.score2,
-                latest.confidence,
+                display_value(latest.rssi1),
+                display_value(latest.rssi2),
+                display_value(latest.score1),
+                display_value(latest.score2),
+                "--" if latest.confidence is None else str(latest.confidence) + "%",
             )
         )
         return current_scatter, trail_scatter, info_text
@@ -196,8 +257,10 @@ def main() -> int:
     try:
         plt.show()
     finally:
+        stop_event.set()
         animation.event_source.stop()
         serial_conn.close()
+        reader_thread.join(timeout=1)
         if csv_file is not None:
             csv_file.close()
 
