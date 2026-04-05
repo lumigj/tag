@@ -8,6 +8,7 @@ from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 from queue import Empty, SimpleQueue
+from statistics import median
 
 import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
@@ -19,11 +20,12 @@ from serial.tools import list_ports
 RSSI_MIN = -95
 RSSI_MAX = -40
 MIN_CALIBRATION_SPAN = 4
-LINE_COORDS = {
-    "B1": (0.10, 0.12),
-    "B2": (0.90, 0.12),
-}
-TRIANGLE_COORDS = {
+FILTER_WINDOW = 5
+FILTER_GATE_DB = 7
+FILTER_CANDIDATE_DB = 4
+FILTER_CONFIRM_COUNT = 3
+FILTER_SMOOTHING = 0.3
+BEACON_COORDS = {
     "B1": (0.50, 0.90),
     "B2": (0.10, 0.12),
     "B3": (0.90, 0.12),
@@ -48,6 +50,14 @@ class CalibrationPoint:
     rssi3: int | None
 
 
+@dataclass
+class BeaconFilterState:
+    window: deque[int]
+    stable_value: float | None
+    candidate_value: float | None
+    candidate_count: int
+
+
 def clamp(value: float, low: float, high: float) -> float:
     if value < low:
         return low
@@ -58,6 +68,15 @@ def clamp(value: float, low: float, high: float) -> float:
 
 def rssi_to_score(rssi: int) -> float:
     return clamp(rssi - RSSI_MIN + 1, 1, RSSI_MAX - RSSI_MIN + 1)
+
+
+def new_filter_state() -> BeaconFilterState:
+    return BeaconFilterState(
+        window=deque(maxlen=FILTER_WINDOW),
+        stable_value=None,
+        candidate_value=None,
+        candidate_count=0,
+    )
 
 
 def rssi_for_label(sample: TagSample | CalibrationPoint, label: str) -> int | None:
@@ -214,9 +233,10 @@ def raw_line_position(sample: TagSample) -> tuple[float, float]:
     score2 = rssi_to_score(sample.rssi2)
     total = score1 + score2
     if total <= 0:
-        return 0.50, LINE_COORDS["B1"][1]
-    x = LINE_COORDS["B1"][0] + (LINE_COORDS["B2"][0] - LINE_COORDS["B1"][0]) * (score2 / total)
-    return round(x, 4), LINE_COORDS["B1"][1]
+        return 0.50, 0.50
+    x = BEACON_COORDS["B1"][0] + (BEACON_COORDS["B2"][0] - BEACON_COORDS["B1"][0]) * (score2 / total)
+    y = BEACON_COORDS["B1"][1] + (BEACON_COORDS["B2"][1] - BEACON_COORDS["B1"][1]) * (score2 / total)
+    return round(x, 4), round(y, 4)
 
 
 def raw_triangle_position(sample: TagSample) -> tuple[float, float]:
@@ -225,18 +245,71 @@ def raw_triangle_position(sample: TagSample) -> tuple[float, float]:
     score3 = rssi_to_score(sample.rssi3 if sample.rssi3 is not None else RSSI_MIN)
     total = score1 + score2 + score3
     if total <= 0:
-        return TRIANGLE_COORDS["B1"]
+        return BEACON_COORDS["B1"]
     x = (
-        TRIANGLE_COORDS["B1"][0] * score1
-        + TRIANGLE_COORDS["B2"][0] * score2
-        + TRIANGLE_COORDS["B3"][0] * score3
+        BEACON_COORDS["B1"][0] * score1
+        + BEACON_COORDS["B2"][0] * score2
+        + BEACON_COORDS["B3"][0] * score3
     ) / total
     y = (
-        TRIANGLE_COORDS["B1"][1] * score1
-        + TRIANGLE_COORDS["B2"][1] * score2
-        + TRIANGLE_COORDS["B3"][1] * score3
+        BEACON_COORDS["B1"][1] * score1
+        + BEACON_COORDS["B2"][1] * score2
+        + BEACON_COORDS["B3"][1] * score3
     ) / total
     return round(x, 4), round(y, 4)
+
+
+def filter_rssi(filter_state: BeaconFilterState, raw_rssi: int) -> int:
+    filter_state.window.append(raw_rssi)
+    median_value = float(median(filter_state.window))
+
+    if filter_state.stable_value is None:
+        filter_state.stable_value = median_value
+        return int(round(filter_state.stable_value))
+
+    if abs(median_value - filter_state.stable_value) <= FILTER_GATE_DB:
+        filter_state.stable_value = (
+            filter_state.stable_value * (1 - FILTER_SMOOTHING) + median_value * FILTER_SMOOTHING
+        )
+        filter_state.candidate_value = None
+        filter_state.candidate_count = 0
+        return int(round(filter_state.stable_value))
+
+    if filter_state.candidate_value is None or abs(median_value - filter_state.candidate_value) > FILTER_CANDIDATE_DB:
+        filter_state.candidate_value = median_value
+        filter_state.candidate_count = 1
+        return int(round(filter_state.stable_value))
+
+    filter_state.candidate_value = (
+        filter_state.candidate_value * filter_state.candidate_count + median_value
+    ) / (filter_state.candidate_count + 1)
+    filter_state.candidate_count += 1
+
+    if filter_state.candidate_count >= FILTER_CONFIRM_COUNT:
+        filter_state.stable_value = filter_state.candidate_value
+        filter_state.candidate_value = None
+        filter_state.candidate_count = 0
+
+    return int(round(filter_state.stable_value))
+
+
+def filter_sample(
+    raw_sample: TagSample,
+    filter_states: dict[str, BeaconFilterState],
+) -> TagSample:
+    filtered_rssi1 = filter_rssi(filter_states["B1"], raw_sample.rssi1)
+    filtered_rssi2 = filter_rssi(filter_states["B2"], raw_sample.rssi2)
+    filtered_rssi3 = None
+    if raw_sample.mode == 3 and raw_sample.rssi3 is not None:
+        filtered_rssi3 = filter_rssi(filter_states["B3"], raw_sample.rssi3)
+
+    return TagSample(
+        timestamp=raw_sample.timestamp,
+        mode=raw_sample.mode,
+        rssi1=filtered_rssi1,
+        rssi2=filtered_rssi2,
+        rssi3=filtered_rssi3,
+    )
 
 
 def calibrated_strength(sample: TagSample, calibration: dict[str, CalibrationPoint | None], label: str) -> float | None:
@@ -279,8 +352,9 @@ def calibrated_line_position(
         return None
 
     ratio = strength2 / (strength1 + strength2)
-    x = LINE_COORDS["B1"][0] + (LINE_COORDS["B2"][0] - LINE_COORDS["B1"][0]) * ratio
-    return round(x, 4), LINE_COORDS["B1"][1]
+    x = BEACON_COORDS["B1"][0] + (BEACON_COORDS["B2"][0] - BEACON_COORDS["B1"][0]) * ratio
+    y = BEACON_COORDS["B1"][1] + (BEACON_COORDS["B2"][1] - BEACON_COORDS["B1"][1]) * ratio
+    return round(x, 4), round(y, 4)
 
 
 def calibrated_triangle_position(
@@ -300,14 +374,14 @@ def calibrated_triangle_position(
 
     total = strength1 + strength2 + strength3
     x = (
-        TRIANGLE_COORDS["B1"][0] * strength1
-        + TRIANGLE_COORDS["B2"][0] * strength2
-        + TRIANGLE_COORDS["B3"][0] * strength3
+        BEACON_COORDS["B1"][0] * strength1
+        + BEACON_COORDS["B2"][0] * strength2
+        + BEACON_COORDS["B3"][0] * strength3
     ) / total
     y = (
-        TRIANGLE_COORDS["B1"][1] * strength1
-        + TRIANGLE_COORDS["B2"][1] * strength2
-        + TRIANGLE_COORDS["B3"][1] * strength3
+        BEACON_COORDS["B1"][1] * strength1
+        + BEACON_COORDS["B2"][1] * strength2
+        + BEACON_COORDS["B3"][1] * strength3
     ) / total
     return round(x, 4), round(y, 4)
 
@@ -335,35 +409,45 @@ def update_layout(
     line_artists: list,
     beacon_scatter,
     beacon_labels: dict[str, any],
+    mode_text,
+    button_b3,
     ax,
 ) -> None:
     for line in line_artists:
         line.set_data([], [])
 
+    ordered = ["B1", "B2", "B3"]
+    coords = BEACON_COORDS
+    beacon_scatter.set_offsets([coords[label] for label in ordered])
+    beacon_scatter.set_sizes([300] * len(ordered))
+
     if mode == 3:
-        coords = TRIANGLE_COORDS
         line_artists[0].set_data([coords["B1"][0], coords["B2"][0]], [coords["B1"][1], coords["B2"][1]])
         line_artists[1].set_data([coords["B1"][0], coords["B3"][0]], [coords["B1"][1], coords["B3"][1]])
         line_artists[2].set_data([coords["B2"][0], coords["B3"][0]], [coords["B2"][1], coords["B3"][1]])
-        ordered = ["B1", "B2", "B3"]
-        ax.set_title("Triangle Mode: raw/calibrated B1-B2-B3 RSSI")
+        beacon_scatter.set_color(["#1d3557", "#1d3557", "#1d3557"])
+        mode_text.set_text("TRIANGLE MODE: B1-B2-B3")
+        mode_text.set_color("#2a9d8f")
+        button_b3.ax.set_facecolor("#d9f2ec")
+        button_b3.label.set_color("black")
+        ax.set_title("Triangle packets use B1, B2, and B3")
     else:
-        coords = LINE_COORDS
         line_artists[0].set_data([coords["B1"][0], coords["B2"][0]], [coords["B1"][1], coords["B2"][1]])
-        ordered = ["B1", "B2"]
-        ax.set_title("Line Mode: raw/calibrated B1-B2 RSSI")
-
-    beacon_scatter.set_offsets([coords[label] for label in ordered])
-    beacon_scatter.set_sizes([300] * len(ordered))
-    beacon_scatter.set_color(["#1d3557"] * len(ordered))
+        beacon_scatter.set_color(["#1d3557", "#1d3557", "#cbd5e1"])
+        mode_text.set_text("LINE MODE: B1-B2 ONLY")
+        mode_text.set_color("#457b9d")
+        button_b3.ax.set_facecolor("#e5e7eb")
+        button_b3.label.set_color("#8a8f98")
+        ax.set_title("Line packets use only B1 and B2; B3 is shown for reference")
 
     for label, text in beacon_labels.items():
-        if label in ordered:
-            x, y = coords[label]
-            text.set_position((x, y + 0.07))
-            text.set_visible(True)
+        x, y = coords[label]
+        text.set_position((x, y + 0.07))
+        if mode == 2 and label == "B3":
+            text.set_color("#8a8f98")
         else:
-            text.set_visible(False)
+            text.set_color("black")
+        text.set_visible(True)
 
 
 def main() -> int:
@@ -375,6 +459,10 @@ def main() -> int:
     calibration_by_mode: dict[int, dict[str, CalibrationPoint | None]] = {
         2: {"B1": None, "B2": None, "B3": None},
         3: {"B1": None, "B2": None, "B3": None},
+    }
+    filter_states_by_mode: dict[int, dict[str, BeaconFilterState]] = {
+        2: {"B1": new_filter_state(), "B2": new_filter_state(), "B3": new_filter_state()},
+        3: {"B1": new_filter_state(), "B2": new_filter_state(), "B3": new_filter_state()},
     }
 
     csv_file = None
@@ -427,6 +515,17 @@ def main() -> int:
         family="monospace",
         bbox={"boxstyle": "round,pad=0.3", "facecolor": "white", "edgecolor": "#adb5bd"},
     )
+    mode_text = ax.text(
+        0.98,
+        0.97,
+        "",
+        transform=ax.transAxes,
+        ha="right",
+        va="top",
+        fontsize=11,
+        weight="bold",
+        bbox={"boxstyle": "round,pad=0.25", "facecolor": "white", "edgecolor": "#cbd5e1"},
+    )
 
     button_b1 = Button(fig.add_axes([0.10, 0.08, 0.18, 0.08]), "Cal B1")
     button_b2 = Button(fig.add_axes([0.32, 0.08, 0.18, 0.08]), "Cal B2")
@@ -445,22 +544,23 @@ def main() -> int:
     button_b3.on_clicked(lambda _event: capture_calibration("B3"))
 
     current_mode = 2
-    update_layout(current_mode, line_artists, beacon_scatter, beacon_labels, ax)
+    update_layout(current_mode, line_artists, beacon_scatter, beacon_labels, mode_text, button_b3, ax)
 
     def update(_frame: int):
         nonlocal current_mode
 
         while True:
             try:
-                sample = sample_queue.get_nowait()
+                raw_sample = sample_queue.get_nowait()
             except Empty:
                 break
 
+            sample = filter_sample(raw_sample, filter_states_by_mode[raw_sample.mode])
             history.append(sample)
             latest_sample_box["sample"] = sample
             if csv_file is not None:
                 csv_file.write(
-                    f"{sample.timestamp},{sample.mode},{sample.rssi1},{sample.rssi2},{sample.rssi3}\n"
+                    f"{raw_sample.timestamp},{raw_sample.mode},{raw_sample.rssi1},{raw_sample.rssi2},{raw_sample.rssi3}\n"
                 )
                 csv_file.flush()
 
@@ -470,7 +570,7 @@ def main() -> int:
         latest = history[-1]
         if latest.mode != current_mode:
             current_mode = latest.mode
-            update_layout(current_mode, line_artists, beacon_scatter, beacon_labels, ax)
+            update_layout(current_mode, line_artists, beacon_scatter, beacon_labels, mode_text, button_b3, ax)
 
         current_calibration = calibration_by_mode[current_mode]
         positions = [estimate_position(sample, current_calibration) for sample in history if sample.mode == current_mode]
@@ -505,7 +605,8 @@ def main() -> int:
             "rssi B3  = {:>5}\n"
             "cal B1   = {:>5}\n"
             "cal B2   = {:>5}\n"
-            "cal B3   = {:>5}".format(
+            "cal B3   = {:>5}\n"
+            "filter   = med{} gate{} x{}".format(
                 "TRIANGLE" if current_mode == 3 else "LINE",
                 latest_position[2],
                 latest_sample.rssi1,
@@ -514,6 +615,9 @@ def main() -> int:
                 calibration_summary(current_calibration["B1"], "B1"),
                 calibration_summary(current_calibration["B2"], "B2"),
                 calibration_summary(current_calibration["B3"], "B3"),
+                FILTER_WINDOW,
+                FILTER_GATE_DB,
+                FILTER_CONFIRM_COUNT,
             )
         )
         return current_scatter, trail_scatter, info_text
