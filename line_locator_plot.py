@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import math
 import sys
 import threading
 import time
@@ -11,8 +12,12 @@ from queue import Empty, SimpleQueue
 from statistics import median
 
 import matplotlib.pyplot as plt
+from matplotlib.axes import Axes
+from matplotlib.collections import PathCollection
+from matplotlib.lines import Line2D
+from matplotlib.text import Text
 from matplotlib.animation import FuncAnimation
-from matplotlib.widgets import Button
+from matplotlib.widgets import Button, TextBox
 from serial import Serial
 from serial.tools import list_ports
 
@@ -25,10 +30,14 @@ FILTER_GATE_DB = 7
 FILTER_CANDIDATE_DB = 4
 FILTER_CONFIRM_COUNT = 3
 FILTER_SMOOTHING = 0.3
+TRIANGLE_SIDE = 0.70
+TRIANGLE_BASE_Y = 0.14
+TRIANGLE_HEIGHT = TRIANGLE_SIDE * math.sqrt(3) / 2
+BEACON_ORDER = ("B1", "B2", "B3")
 BEACON_COORDS = {
-    "B1": (0.18, 0.14),
-    "B2": (0.82, 0.14),
-    "B3": (0.50, 0.86),
+    "B1": (0.50 - TRIANGLE_SIDE / 2, TRIANGLE_BASE_Y),
+    "B2": (0.50 + TRIANGLE_SIDE / 2, TRIANGLE_BASE_Y),
+    "B3": (0.50, TRIANGLE_BASE_Y + TRIANGLE_HEIGHT),
 }
 
 
@@ -85,6 +94,12 @@ def rssi_for_label(sample: TagSample | CalibrationPoint, label: str) -> int | No
     if label == "B2":
         return sample.rssi2
     return sample.rssi3
+
+
+def active_labels_for_mode(mode: int) -> tuple[str, ...]:
+    if mode == 3:
+        return BEACON_ORDER
+    return BEACON_ORDER[:2]
 
 
 def parse_sample(line: str) -> TagSample | None:
@@ -237,13 +252,34 @@ def capture_point(latest_sample: TagSample | None, label: str) -> CalibrationPoi
     )
 
 
-def calibration_summary(point: CalibrationPoint | None, label: str) -> str:
+def calibration_entry_text(point: CalibrationPoint | None, label: str) -> str:
     if point is None:
-        return "--"
+        return ""
     value = rssi_for_label(point, label)
     if value is None:
-        return "--"
+        return ""
     return str(value)
+
+
+def build_manual_point(
+    label: str,
+    mode: int,
+    row_values: dict[str, int],
+) -> CalibrationPoint:
+    return CalibrationPoint(
+        label=label,
+        mode=mode,
+        rssi1=row_values["B1"],
+        rssi2=row_values["B2"],
+        rssi3=row_values["B3"] if mode == 3 else None,
+    )
+
+
+def calibration_rows_summary(calibration: dict[str, CalibrationPoint | None], mode: int) -> str:
+    return " ".join(
+        label if calibration[label] is not None else "--"
+        for label in active_labels_for_mode(mode)
+    )
 
 
 def raw_line_position(sample: TagSample) -> tuple[float, float]:
@@ -341,7 +377,8 @@ def calibrated_strength(sample: TagSample, calibration: dict[str, CalibrationPoi
         return None
 
     far_values = []
-    for other_label, other_point in calibration.items():
+    for other_label in active_labels_for_mode(sample.mode):
+        other_point = calibration[other_label]
         if other_label == label or other_point is None:
             continue
         other_value = rssi_for_label(other_point, label)
@@ -424,17 +461,20 @@ def estimate_position(
 
 def update_layout(
     mode: int,
-    line_artists: list,
-    beacon_scatter,
-    beacon_labels: dict[str, any],
-    mode_text,
-    button_b3,
-    ax,
+    line_artists: list[Line2D],
+    beacon_scatter: PathCollection,
+    beacon_labels: dict[str, Text],
+    mode_text: Text,
+    capture_buttons: dict[str, Button],
+    matrix_boxes: dict[str, dict[str, TextBox]],
+    matrix_row_labels: dict[str, Text],
+    matrix_col_labels: dict[str, Text],
+    ax: Axes,
 ) -> None:
     for line in line_artists:
         line.set_data([], [])
 
-    ordered = ["B1", "B2", "B3"]
+    ordered = list(BEACON_ORDER)
     coords = BEACON_COORDS
     beacon_scatter.set_offsets([coords[label] for label in ordered])
     beacon_scatter.set_sizes([300] * len(ordered))
@@ -446,16 +486,12 @@ def update_layout(
         beacon_scatter.set_color(["#1d3557", "#1d3557", "#1d3557"])
         mode_text.set_text("TRIANGLE MODE: B1-B2-B3")
         mode_text.set_color("#2a9d8f")
-        button_b3.ax.set_facecolor("#d9f2ec")
-        button_b3.label.set_color("black")
         ax.set_title("Triangle mode uses B1, B2, and B3", pad=18)
     else:
         line_artists[0].set_data([coords["B1"][0], coords["B2"][0]], [coords["B1"][1], coords["B2"][1]])
         beacon_scatter.set_color(["#1d3557", "#1d3557", "#cbd5e1"])
         mode_text.set_text("LINE MODE: B1-B2 ONLY")
         mode_text.set_color("#457b9d")
-        button_b3.ax.set_facecolor("#e5e7eb")
-        button_b3.label.set_color("#8a8f98")
         ax.set_title("Line mode uses B1 and B2; B3 is shown for reference", pad=18)
 
     for label, text in beacon_labels.items():
@@ -471,6 +507,21 @@ def update_layout(
         else:
             text.set_color("black")
         text.set_visible(True)
+
+    active_labels = set(active_labels_for_mode(mode))
+    for label, text in matrix_row_labels.items():
+        text.set_color("black" if label in active_labels else "#8a8f98")
+        capture_buttons[label].ax.set_facecolor("#d9f2ec" if label in active_labels else "#e5e7eb")
+        capture_buttons[label].label.set_color("black" if label in active_labels else "#8a8f98")
+
+    for label, text in matrix_col_labels.items():
+        text.set_color("black" if label in active_labels else "#8a8f98")
+
+    for row_label, row_boxes in matrix_boxes.items():
+        for col_label, box in row_boxes.items():
+            active = row_label in active_labels and col_label in active_labels
+            box.ax.set_facecolor("white" if active else "#f3f4f6")
+            box.text_disp.set_color("black" if active else "#8a8f98")
 
 
 def main() -> int:
@@ -505,8 +556,8 @@ def main() -> int:
     )
     reader_thread.start()
 
-    fig, ax = plt.subplots(figsize=(10.4, 6.2))
-    fig.subplots_adjust(bottom=0.28, top=0.82)
+    fig, ax = plt.subplots(figsize=(11.6, 7.8))
+    fig.subplots_adjust(left=0.26, right=0.94, bottom=0.46, top=0.82)
     fig.canvas.manager.set_window_title("micro:bit locator")
     ax.set_xlim(0.0, 1.0)
     ax.set_ylim(0.0, 1.0)
@@ -526,12 +577,11 @@ def main() -> int:
         "B3": ax.text(0, 0, "B3", ha="center", va="bottom", fontsize=11, weight="bold"),
     }
     trail_scatter = ax.scatter([], [], s=[], c=[], alpha=0.35, zorder=2)
-    current_scatter = ax.scatter([0.5], [0.5], s=[280], c=["#adb5bd"], edgecolors="black", zorder=4)
-    info_text = ax.text(
-        0.02,
-        0.97,
+    current_scatter = ax.scatter([0.5], [TRIANGLE_BASE_Y + TRIANGLE_HEIGHT / 3], s=[280], c=["#adb5bd"], edgecolors="black", zorder=4)
+    info_text = fig.text(
+        0.08,
+        0.76,
         "Waiting for tag data...",
-        transform=ax.transAxes,
         ha="left",
         va="top",
         fontsize=9,
@@ -550,9 +600,52 @@ def main() -> int:
         bbox={"boxstyle": "round,pad=0.25", "facecolor": "white", "edgecolor": "#cbd5e1"},
     )
 
-    button_b1 = Button(fig.add_axes([0.10, 0.08, 0.18, 0.08]), "Cal B1")
-    button_b2 = Button(fig.add_axes([0.32, 0.08, 0.18, 0.08]), "Cal B2")
-    button_b3 = Button(fig.add_axes([0.54, 0.08, 0.18, 0.08]), "Cal B3")
+    fig.text(0.08, 0.34, "Calibration Matrix", ha="left", va="center", fontsize=11, weight="bold")
+    fig.text(
+        0.08,
+        0.315,
+        "Rows are near positions. Columns are the RSSI heard from each beacon.",
+        ha="left",
+        va="center",
+        fontsize=9,
+        color="#6b7280",
+    )
+
+    matrix_col_positions = {"B1": 0.34, "B2": 0.47, "B3": 0.60}
+    matrix_row_positions = {"B1": 0.19, "B2": 0.115, "B3": 0.04}
+    matrix_col_labels = {
+        label: fig.text(x + 0.05, 0.275, label, ha="center", va="center", fontsize=10, weight="bold")
+        for label, x in matrix_col_positions.items()
+    }
+    matrix_row_labels = {
+        label: fig.text(0.08, y + 0.0275, f"Near {label}", ha="left", va="center", fontsize=10, weight="bold")
+        for label, y in matrix_row_positions.items()
+    }
+    capture_buttons = {
+        label: Button(fig.add_axes([0.17, y, 0.12, 0.055]), f"Cap {label}")
+        for label, y in matrix_row_positions.items()
+    }
+    matrix_boxes: dict[str, dict[str, TextBox]] = {}
+    for row_label, y in matrix_row_positions.items():
+        matrix_boxes[row_label] = {}
+        for col_label, x in matrix_col_positions.items():
+            matrix_boxes[row_label][col_label] = TextBox(fig.add_axes([x, y, 0.10, 0.055]), "")
+    apply_manual_button = Button(fig.add_axes([0.77, 0.11, 0.15, 0.09]), "Apply Matrix")
+    fig.text(
+        0.08,
+        0.015,
+        "Manual apply updates only rows where all active cells are filled. Leave a whole row blank to keep it unchanged.",
+        ha="left",
+        va="center",
+        fontsize=9,
+        color="#6b7280",
+    )
+
+    def refresh_matrix_inputs(mode: int) -> None:
+        for row_label in BEACON_ORDER:
+            point = calibration_by_mode[mode][row_label]
+            for col_label in BEACON_ORDER:
+                matrix_boxes[row_label][col_label].set_val(calibration_entry_text(point, col_label))
 
     def capture_calibration(label: str) -> None:
         latest_sample = latest_sample_box["sample"]
@@ -560,14 +653,65 @@ def main() -> int:
         if point is None:
             return
         calibration_by_mode[point.mode][label] = point
+        refresh_matrix_inputs(point.mode)
         fig.canvas.draw_idle()
 
-    button_b1.on_clicked(lambda _event: capture_calibration("B1"))
-    button_b2.on_clicked(lambda _event: capture_calibration("B2"))
-    button_b3.on_clicked(lambda _event: capture_calibration("B3"))
+    def apply_manual_calibration(_event=None) -> None:
+        active_labels = active_labels_for_mode(current_mode)
+        updated_rows = []
+
+        for row_label in active_labels:
+            raw_values = {
+                col_label: matrix_boxes[row_label][col_label].text.strip()
+                for col_label in active_labels
+            }
+            if all(not raw_value for raw_value in raw_values.values()):
+                continue
+
+            if any(not raw_value for raw_value in raw_values.values()):
+                print(f"Skipping manual row {row_label}: fill every active cell or leave the row blank.")
+                continue
+
+            try:
+                row_values = {
+                    col_label: int(raw_value)
+                    for col_label, raw_value in raw_values.items()
+                }
+            except ValueError:
+                print(f"Skipping manual row {row_label}: all active cells must be integers.")
+                continue
+
+            calibration_by_mode[current_mode][row_label] = build_manual_point(
+                label=row_label,
+                mode=current_mode,
+                row_values=row_values,
+            )
+            updated_rows.append(row_label)
+
+        if updated_rows:
+            refresh_matrix_inputs(current_mode)
+            fig.canvas.draw_idle()
+            print(f"Updated manual calibration rows for mode {current_mode}: {', '.join(updated_rows)}")
+
+    capture_buttons["B1"].on_clicked(lambda _event: capture_calibration("B1"))
+    capture_buttons["B2"].on_clicked(lambda _event: capture_calibration("B2"))
+    capture_buttons["B3"].on_clicked(lambda _event: capture_calibration("B3"))
+    apply_manual_button.on_clicked(apply_manual_calibration)
 
     current_mode = 2
-    update_layout(current_mode, line_artists, beacon_scatter, beacon_labels, mode_text, button_b3, ax)
+    update_layout(
+        current_mode,
+        line_artists,
+        beacon_scatter,
+        beacon_labels,
+        mode_text,
+        capture_buttons,
+        matrix_boxes,
+        matrix_row_labels,
+        matrix_col_labels,
+        ax,
+    )
+    refresh_matrix_inputs(current_mode)
 
     def update(_frame: int):
         nonlocal current_mode
@@ -593,7 +737,19 @@ def main() -> int:
         latest = history[-1]
         if latest.mode != current_mode:
             current_mode = latest.mode
-            update_layout(current_mode, line_artists, beacon_scatter, beacon_labels, mode_text, button_b3, ax)
+            update_layout(
+                current_mode,
+                line_artists,
+                beacon_scatter,
+                beacon_labels,
+                mode_text,
+                capture_buttons,
+                matrix_boxes,
+                matrix_row_labels,
+                matrix_col_labels,
+                ax,
+            )
+            refresh_matrix_inputs(current_mode)
 
         current_calibration = calibration_by_mode[current_mode]
         positions = [estimate_position(sample, current_calibration) for sample in history if sample.mode == current_mode]
@@ -620,24 +776,21 @@ def main() -> int:
         else:
             current_scatter.set_color(["#457b9d"])
 
+        active_rows = calibration_rows_summary(current_calibration, current_mode)
         info_text.set_text(
             "tag mode = {:>8}\n"
             "estimate = {:>8}\n"
             "rssi B1  = {:>5}\n"
             "rssi B2  = {:>5}\n"
             "rssi B3  = {:>5}\n"
-            "cal B1   = {:>5}\n"
-            "cal B2   = {:>5}\n"
-            "cal B3   = {:>5}\n"
+            "cal rows = {:>8}\n"
             "filter   = med{} gate{} x{}".format(
                 "TRIANGLE" if current_mode == 3 else "LINE",
                 latest_position[2],
                 latest_sample.rssi1,
                 latest_sample.rssi2,
                 "--" if latest_sample.rssi3 is None else latest_sample.rssi3,
-                calibration_summary(current_calibration["B1"], "B1"),
-                calibration_summary(current_calibration["B2"], "B2"),
-                calibration_summary(current_calibration["B3"], "B3"),
+                active_rows,
                 FILTER_WINDOW,
                 FILTER_GATE_DB,
                 FILTER_CONFIRM_COUNT,
