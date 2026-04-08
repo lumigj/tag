@@ -89,11 +89,11 @@ def rssi_for_label(sample: TagSample | CalibrationPoint, label: str) -> int | No
 
 def parse_sample(line: str) -> TagSample | None:
     parts = line.replace("\x00", "").strip().split("|")
-    if not parts or parts[0] != "T":
+    if not parts:
         return None
 
     try:
-        if len(parts) == 3:
+        if len(parts) == 3 and parts[0] == "L":
             return TagSample(
                 timestamp=time.time(),
                 mode=2,
@@ -101,7 +101,17 @@ def parse_sample(line: str) -> TagSample | None:
                 rssi2=int(parts[2]),
                 rssi3=None,
             )
-        if len(parts) == 4 and parts[1] in {"2", "L"}:
+        if len(parts) == 3:
+            if parts[0] != "T":
+                return None
+            return TagSample(
+                timestamp=time.time(),
+                mode=2,
+                rssi1=int(parts[1]),
+                rssi2=int(parts[2]),
+                rssi3=None,
+            )
+        if len(parts) == 4 and parts[0] == "T" and parts[1] in {"2", "L"}:
             return TagSample(
                 timestamp=time.time(),
                 mode=2,
@@ -109,7 +119,15 @@ def parse_sample(line: str) -> TagSample | None:
                 rssi2=int(parts[3]),
                 rssi3=None,
             )
-        if len(parts) == 5 and parts[1] in {"3", "T"}:
+        if len(parts) == 4 and parts[0] == "T":
+            return TagSample(
+                timestamp=time.time(),
+                mode=3,
+                rssi1=int(parts[1]),
+                rssi2=int(parts[2]),
+                rssi3=int(parts[3]),
+            )
+        if len(parts) == 5 and parts[0] == "T" and parts[1] in {"3", "T"}:
             return TagSample(
                 timestamp=time.time(),
                 mode=3,
@@ -117,7 +135,7 @@ def parse_sample(line: str) -> TagSample | None:
                 rssi2=int(parts[3]),
                 rssi3=int(parts[4]),
             )
-        if len(parts) >= 7:
+        if len(parts) >= 7 and parts[0] == "T":
             return TagSample(
                 timestamp=time.time(),
                 mode=2,

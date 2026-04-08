@@ -88,9 +88,9 @@ modeDisplayUntil = input.runningTime() + MODE_DISPLAY_MS
 basic.forever(function () {
     if (hasFreshFix()) {
         if (trackingMode == 3) {
-            radio.sendString("T|3|" + rawRssi1 + "|" + rawRssi2 + "|" + rawRssi3)
+            radio.sendString("T|" + rawRssi1 + "|" + rawRssi2 + "|" + rawRssi3)
         } else {
-            radio.sendString("T|2|" + rawRssi1 + "|" + rawRssi2)
+            radio.sendString("L|" + rawRssi1 + "|" + rawRssi2)
         }
     }
     if (input.runningTime() < modeDisplayUntil) {
