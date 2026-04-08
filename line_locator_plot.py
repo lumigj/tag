@@ -26,9 +26,9 @@ FILTER_CANDIDATE_DB = 4
 FILTER_CONFIRM_COUNT = 3
 FILTER_SMOOTHING = 0.3
 BEACON_COORDS = {
-    "B1": (0.50, 0.90),
-    "B2": (0.10, 0.12),
-    "B3": (0.90, 0.12),
+    "B1": (0.18, 0.14),
+    "B2": (0.82, 0.14),
+    "B3": (0.50, 0.86),
 }
 
 
@@ -448,7 +448,7 @@ def update_layout(
         mode_text.set_color("#2a9d8f")
         button_b3.ax.set_facecolor("#d9f2ec")
         button_b3.label.set_color("black")
-        ax.set_title("Triangle packets use B1, B2, and B3")
+        ax.set_title("Triangle mode uses B1, B2, and B3", pad=18)
     else:
         line_artists[0].set_data([coords["B1"][0], coords["B2"][0]], [coords["B1"][1], coords["B2"][1]])
         beacon_scatter.set_color(["#1d3557", "#1d3557", "#cbd5e1"])
@@ -456,11 +456,16 @@ def update_layout(
         mode_text.set_color("#457b9d")
         button_b3.ax.set_facecolor("#e5e7eb")
         button_b3.label.set_color("#8a8f98")
-        ax.set_title("Line packets use only B1 and B2; B3 is shown for reference")
+        ax.set_title("Line mode uses B1 and B2; B3 is shown for reference", pad=18)
 
     for label, text in beacon_labels.items():
         x, y = coords[label]
-        text.set_position((x, y + 0.07))
+        if y >= 0.75:
+            text.set_position((x, y - 0.09))
+            text.set_va("top")
+        else:
+            text.set_position((x, y + 0.07))
+            text.set_va("bottom")
         if mode == 2 and label == "B3":
             text.set_color("#8a8f98")
         else:
@@ -500,8 +505,8 @@ def main() -> int:
     )
     reader_thread.start()
 
-    fig, ax = plt.subplots(figsize=(10, 5.4))
-    fig.subplots_adjust(bottom=0.26)
+    fig, ax = plt.subplots(figsize=(10.4, 6.2))
+    fig.subplots_adjust(bottom=0.28, top=0.82)
     fig.canvas.manager.set_window_title("micro:bit locator")
     ax.set_xlim(0.0, 1.0)
     ax.set_ylim(0.0, 1.0)
@@ -521,7 +526,7 @@ def main() -> int:
         "B3": ax.text(0, 0, "B3", ha="center", va="bottom", fontsize=11, weight="bold"),
     }
     trail_scatter = ax.scatter([], [], s=[], c=[], alpha=0.35, zorder=2)
-    current_scatter = ax.scatter([0.5], [0.12], s=[280], c=["#adb5bd"], edgecolors="black", zorder=4)
+    current_scatter = ax.scatter([0.5], [0.5], s=[280], c=["#adb5bd"], edgecolors="black", zorder=4)
     info_text = ax.text(
         0.02,
         0.97,
@@ -529,18 +534,18 @@ def main() -> int:
         transform=ax.transAxes,
         ha="left",
         va="top",
-        fontsize=10,
+        fontsize=9,
         family="monospace",
+        linespacing=1.35,
         bbox={"boxstyle": "round,pad=0.3", "facecolor": "white", "edgecolor": "#adb5bd"},
     )
-    mode_text = ax.text(
-        0.98,
-        0.97,
+    mode_text = fig.text(
+        0.5,
+        0.875,
         "",
-        transform=ax.transAxes,
-        ha="right",
-        va="top",
-        fontsize=11,
+        ha="center",
+        va="center",
+        fontsize=12,
         weight="bold",
         bbox={"boxstyle": "round,pad=0.25", "facecolor": "white", "edgecolor": "#cbd5e1"},
     )
