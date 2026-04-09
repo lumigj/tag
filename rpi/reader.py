@@ -87,10 +87,23 @@ def run() -> int:
                     continue
                 line = raw.decode("utf-8", errors="ignore").strip()
 
-            sample = parse_sample(line)
-            if sample is None:
+            if not line:
                 continue
 
+            print("RX raw: {}".format(line))
+            sample = parse_sample(line)
+            if sample is None:
+                print("Ignored non-locator payload.")
+                continue
+
+            print(
+                "Parsed locator sample: mode={} rssi=({}, {}, {})".format(
+                    sample.mode,
+                    sample.rssi1,
+                    sample.rssi2,
+                    sample.rssi3,
+                )
+            )
             payload = json.dumps(sample_to_message(sample, args.tag_id), separators=(",", ":"))
             result = client.publish(topic, payload)
             status = result[0]

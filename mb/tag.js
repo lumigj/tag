@@ -24,23 +24,10 @@ function hasFreshFix () {
     if (trackingMode == TRIANGLE_MODE) {
         return lastSeen1 > 0 && lastSeen2 > 0 && lastSeen3 > 0 && now - lastSeen1 <= BEACON_TIMEOUT_MS && now - lastSeen2 <= BEACON_TIMEOUT_MS && now - lastSeen3 <= BEACON_TIMEOUT_MS
     }
-    if (trackingMode != LINE_MODE) {
-        return false
-    }
     return lastSeen1 > 0 && lastSeen2 > 0 && now - lastSeen1 <= BEACON_TIMEOUT_MS && now - lastSeen2 <= BEACON_TIMEOUT_MS
 }
 function drawModeIndicator () {
     basic.clearScreen()
-    if (trackingMode == MOTION_MODE) {
-        led.plot(0, 4)
-        led.plot(0, 3)
-        led.plot(1, 2)
-        led.plot(2, 3)
-        led.plot(3, 2)
-        led.plot(4, 3)
-        led.plot(4, 4)
-        return
-    }
     if (trackingMode == TRIANGLE_MODE) {
         led.plot(1, 0)
         led.plot(2, 0)
@@ -69,7 +56,6 @@ input.onButtonPressed(Button.A, function () {
     modeDisplayUntil = input.runningTime() + MODE_DISPLAY_MS
 })
 input.onButtonPressed(Button.AB, function () {
-    trackingMode = MOTION_MODE
     modeDisplayUntil = input.runningTime() + MODE_DISPLAY_MS
 })
 input.onButtonPressed(Button.B, function () {
@@ -87,19 +73,16 @@ let rawRssi2 = 0
 let rawRssi1 = 0
 let BEACON_TIMEOUT_MS = 0
 let MODE_DISPLAY_MS = 0
-let MOTION_SEND_INTERVAL_MS = 0
-let LOCATOR_SEND_INTERVAL_MS = 0
-let GROUP = 23
 let TRIANGLE_MODE = 0
 let LINE_MODE = 0
-let MOTION_MODE = 0
-MOTION_MODE = 1
+let GROUP = 23
 LINE_MODE = 2
 TRIANGLE_MODE = 3
 MODE_DISPLAY_MS = 900
 BEACON_TIMEOUT_MS = 700
-MOTION_SEND_INTERVAL_MS = 100
-LOCATOR_SEND_INTERVAL_MS = 180
+let MOTION_SEND_INTERVAL_MS = 1000
+let LOCATOR_SEND_INTERVAL_MS = 180
+let LOOP_TICK_MS = 25
 rawRssi1 = -95
 rawRssi2 = -95
 rawRssi3 = -95
@@ -108,25 +91,23 @@ radio.setGroup(GROUP)
 radio.setFrequencyBand(11)
 radio.setTransmitPower(7)
 modeDisplayUntil = input.runningTime() + MODE_DISPLAY_MS
+let lastMotionSent = input.runningTime()
+let lastLocatorSent = input.runningTime()
 basic.forever(function () {
-    if (trackingMode == MOTION_MODE) {
+    now = input.runningTime()
+    if (now - lastMotionSent >= MOTION_SEND_INTERVAL_MS) {
         radio.sendString("A " + input.runningTime() + " " + input.acceleration(Dimension.Strength))
-    } else if (hasFreshFix()) {
+        lastMotionSent = now
+    } else if (hasFreshFix() && now - lastLocatorSent >= LOCATOR_SEND_INTERVAL_MS) {
         if (trackingMode == TRIANGLE_MODE) {
             radio.sendString("T|" + rawRssi1 + "|" + rawRssi2 + "|" + rawRssi3)
         } else {
             radio.sendString("L|" + rawRssi1 + "|" + rawRssi2)
         }
+        lastLocatorSent = now
     }
     if (input.runningTime() < modeDisplayUntil) {
         drawModeIndicator()
-    } else if (trackingMode == MOTION_MODE) {
-        basic.clearScreen()
-        led.plot(1, 2)
-        led.plot(2, 1)
-        led.plot(2, 2)
-        led.plot(2, 3)
-        led.plot(3, 2)
     } else if (hasFreshFix()) {
         basic.clearScreen()
         if (trackingMode == TRIANGLE_MODE) {
@@ -141,9 +122,5 @@ basic.forever(function () {
         basic.clearScreen()
         led.plot(0, 4)
     }
-    if (trackingMode == MOTION_MODE) {
-        basic.pause(MOTION_SEND_INTERVAL_MS)
-    } else {
-        basic.pause(LOCATOR_SEND_INTERVAL_MS)
-    }
+    basic.pause(LOOP_TICK_MS)
 })
