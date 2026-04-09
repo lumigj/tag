@@ -21,11 +21,6 @@ counter = 0
 def init_db():
     db.execute('''CREATE TABLE IF NOT EXISTS accelerometer 
                   (timestamp REAL, running_time INTEGER, strength INTEGER, session_id INTEGER)''')
-    
-    # ### AI SUGGESTION
-    # # This speeds up writes by up to 10x on a Raspberry Pi
-    # db.execute('PRAGMA journal_mode=WAL')
-
     conn.commit()
     
 def get_last_state():
