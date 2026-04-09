@@ -5,7 +5,7 @@ from datetime import datetime
 COMPORT = '/dev/ttyACM0'
 WINDOW_SIZE = 7
 STEP_SIZE = WINDOW_SIZE // 2
-BATCH_SIZE = STEP_SIZE * 10
+BATCH_SIZE = 10
 THRESHOLD_MS = 1500
 
 
