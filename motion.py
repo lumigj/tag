@@ -10,7 +10,7 @@ THRESHOLD_MS = 1500
 
 
 # Initialize Connection globally
-conn = sqlite3.connect('data.db', check_same_thread=False)
+conn = sqlite3.connect('hub_u1.db', check_same_thread=False)
 db = conn.cursor()
 
 last_time = 0
@@ -19,8 +19,14 @@ counter = 0
 
 
 def init_db():
-    db.execute('''CREATE TABLE IF NOT EXISTS accelerometer 
-                  (timestamp REAL, running_time INTEGER, strength INTEGER, session_id INTEGER)''')
+    db.execute('''CREATE TABLE IF NOT EXISTS accelerometer (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp REAL NOT NULL,
+                running_time INTEGER NOT NULL,
+                strength INTEGER NOT NULL,
+                session_id INTEGER NOT NULL,
+                uploaded INTEGER DEFAULT 0 NOT NULL
+               )''')
     conn.commit()
     
 def get_last_state():
@@ -123,7 +129,7 @@ try:
                 counter += 1
                         
                 # 3. Fast SQLite Insert
-                db.execute("INSERT INTO accelerometer VALUES (?, ?, ?, ?)",
+                db.execute("INSERT INTO accelerometer VALUES (NULL, ?, ?, ?, ?, 0)",
                             (full_row['timestamp'], full_row['running_time'], 
                             full_row['strength'], full_row['session_id']))
             
