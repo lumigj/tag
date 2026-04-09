@@ -1,18 +1,19 @@
 import sqlite3
 import serial
 from datetime import datetime
+import time
 
 COMPORT = '/dev/ttyACM0'
 WINDOW_SIZE = 7
 STEP_SIZE = WINDOW_SIZE // 2
-BATCH_SIZE = 10
+COMMIT_INTERVAL = 1.0
 THRESHOLD_MS = 1500
-
 
 # Initialize Connection globally
 conn = sqlite3.connect('hub_u1.db', check_same_thread=False)
 db = conn.cursor()
 
+last_commit_time = time.time()
 last_time = 0
 current_session = 0
 counter = 0
@@ -126,18 +127,21 @@ try:
 
             if parsed_data:
                 full_row = append_with_session(parsed_data)
-                counter += 1
+                # counter += 1
                         
                 # 3. Fast SQLite Insert
                 db.execute("INSERT INTO accelerometer VALUES (NULL, ?, ?, ?, ?, 0)",
                             (full_row['timestamp'], full_row['running_time'], 
                             full_row['strength'], full_row['session_id']))
             
-                # 4. Commit every BATCH_SIZE rows
-                if counter % (BATCH_SIZE) == 0:
-                    conn.commit()
-                    display_time = full_row['timestamp'].split('T')[-1][:8]
-                    print(f"Batch committed to SQLite at {display_time}")
+                # 4. Commit every COMMIT_INTERVAL seconds
+                current_time = time.time()
+                if current_time - last_commit_time >= COMMIT_INTERVAL:
+                     conn.commit()
+                     display_time = full_row['timestamp'].split('T')[-1][:8]
+                     print(f"Batch committed to SQLite at {display_time}")
+                
+                
 
 except serial.SerialException as err:
 	
