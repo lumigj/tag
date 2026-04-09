@@ -1,4 +1,13 @@
 // @flow
+/**
+ * ACCELEROMETER DATA EMITTER: Captures accelerometer data at 10Hz (every 100ms).
+ * Sends a string over Radio containing:
+ * [Prefix 'A'] [Timestamp in ms] [Combined Acceleration Strength]
+ */
+loops.everyInterval(100, function () {
+    radio.sendString(`A ${input.runningTime()} ${input.acceleration(Dimension.Strength)}`)
+})
+
 radio.onReceivedNumber(function (receivedNumber) {
     if (receivedNumber != 1 && receivedNumber != 2 && receivedNumber != 3) {
         return
