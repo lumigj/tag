@@ -5,7 +5,12 @@ import EventLogTable from "./EventLogTable";
 import RawStrengthChart from "./RawStrengthChart";
 import PredictionBreakdownChart from "./PredictionBreakdownChart";
 import LabeledStrengthTimeline from "./LabeledStrengthTimeline";
-import LocatorLiveMap from "./LocatorLiveMap";
+// import LocatorLiveMap from "./LocatorLiveMap";
+
+const POLL_INTERVAL_MS = 10000;
+const RAW_FETCH_LIMIT = 5;
+const PROCESSED_FETCH_LIMIT = 5;
+const EVENT_LOG_ROWS = 5;
 
 function App() {
   const [deviceState, setDeviceState] = useState(null);
@@ -21,8 +26,8 @@ function App() {
       try {
         const [summary, raw, processed] = await Promise.all([
           getSummary(),
-          getRawLatest(1200),
-          getProcessedLatest(200),
+          getRawLatest(RAW_FETCH_LIMIT),
+          getProcessedLatest(PROCESSED_FETCH_LIMIT),
         ]);
         if (!active) return;
         setDeviceState(summary);
@@ -36,7 +41,7 @@ function App() {
     }
 
     refresh();
-    const timer = setInterval(refresh, 1000);
+    const timer = setInterval(refresh, POLL_INTERVAL_MS);
     return () => {
       active = false;
       clearInterval(timer);
@@ -118,14 +123,16 @@ function App() {
         <LabeledStrengthTimeline rawRows={rawRows} processedRows={processedRows} />
       </div>
 
+      {/* Live locator map (SSE/MQTT) — disabled
       {activeModeCard === "FIND" ? (
         <div className="bottom-row">
           <LocatorLiveMap />
         </div>
       ) : null}
+      */}
 
       <div className="bottom-row">
-        <EventLogTable events={processedRows} />
+        <EventLogTable events={processedRows.slice(0, EVENT_LOG_ROWS)} />
       </div>
     </div>
   );

@@ -1,9 +1,12 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { getLocatorLatest } from "../api/client";
+
+const LOCATOR_UI_THROTTLE_MS = 5000;
 
 function LocatorLiveMap() {
   const [locator, setLocator] = useState(null);
   const [streamError, setStreamError] = useState("");
+  const latestLocatorRef = useRef(null);
 
   useEffect(() => {
     let active = true;
@@ -12,7 +15,10 @@ function LocatorLiveMap() {
     async function init() {
       try {
         const snapshot = await getLocatorLatest();
-        if (active) setLocator(snapshot);
+        if (active) {
+          setLocator(snapshot);
+          latestLocatorRef.current = snapshot;
+        }
       } catch (error) {
         if (active) setStreamError(String(error?.message || error));
       }
@@ -22,7 +28,7 @@ function LocatorLiveMap() {
         if (!active) return;
         try {
           const parsed = JSON.parse(event.data);
-          setLocator(parsed);
+          latestLocatorRef.current = parsed;
           setStreamError("");
         } catch {
           setStreamError("Invalid locator stream payload");
@@ -35,8 +41,15 @@ function LocatorLiveMap() {
 
     init();
 
+    const flushInterval = setInterval(() => {
+      if (!active) return;
+      const latest = latestLocatorRef.current;
+      if (latest) setLocator(latest);
+    }, LOCATOR_UI_THROTTLE_MS);
+
     return () => {
       active = false;
+      clearInterval(flushInterval);
       if (es) es.close();
     };
   }, []);
