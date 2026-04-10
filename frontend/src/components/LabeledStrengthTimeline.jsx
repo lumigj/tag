@@ -1,6 +1,6 @@
 /** Fixed strength y-axis (matches RawStrengthChart). */
 const STRENGTH_AXIS_MIN = 0;
-const STRENGTH_AXIS_MAX = 3000;
+const STRENGTH_AXIS_MAX = 2000;
 
 function parseTimestamp(value) {
   if (value === null || value === undefined) return null;

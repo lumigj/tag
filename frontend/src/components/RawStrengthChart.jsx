@@ -28,7 +28,7 @@ const SESSION_PALETTE = ["#2563eb", "#0d9488", "#7c3aed", "#ea580c", "#db2777"];
 
 /** Fixed strength y-axis (sensor scale); samples are clamped for drawing only. */
 const STRENGTH_AXIS_MIN = 0;
-const STRENGTH_AXIS_MAX = 3000;
+const STRENGTH_AXIS_MAX = 2000;
 
 function sessionColor(sessionId, indexInPalette) {
   const key = Number(sessionId);
