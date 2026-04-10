@@ -26,6 +26,10 @@ function formatClock(ms) {
 
 const SESSION_PALETTE = ["#2563eb", "#0d9488", "#7c3aed", "#ea580c", "#db2777"];
 
+/** Fixed strength y-axis; samples clamped for drawing only. */
+const STRENGTH_AXIS_MIN = 0;
+const STRENGTH_AXIS_MAX = 2000;
+
 function sessionColor(sessionId, indexInPalette) {
   const key = Number(sessionId);
   const i = Number.isNaN(key) ? indexInPalette % SESSION_PALETTE.length : Math.abs(key) % SESSION_PALETTE.length;
@@ -72,9 +76,11 @@ function RawStrengthChart({ data }) {
   const sessionRank = new Map(sessionIds.map((id, i) => [id, i]));
 
   const strengths = rows.map((r) => r.strength);
-  const sMin = Math.min(...strengths);
-  const sMax = Math.max(...strengths);
-  const sRange = sMax - sMin || 1;
+  const strengthDataMin = Math.min(...strengths);
+  const strengthDataMax = Math.max(...strengths);
+  const sMin = STRENGTH_AXIS_MIN;
+  const sMax = STRENGTH_AXIS_MAX;
+  const sRange = sMax - sMin;
 
   const timeMsList = rows.map((r) => r.timeMs).filter((t) => t !== null);
   const hasTimeAxis = timeMsList.length === rows.length;
@@ -114,7 +120,10 @@ function RawStrengthChart({ data }) {
     }
     return chartLeft + ((fallbackRunningTime - rtMin) / rtSpan) * innerPlotW;
   };
-  const toY = (s) => height - chartBottom - ((s - sMin) / sRange) * (height - chartTop - chartBottom);
+  const toY = (s) => {
+    const clamped = Math.min(sMax, Math.max(sMin, s));
+    return height - chartBottom - ((clamped - sMin) / sRange) * (height - chartTop - chartBottom);
+  };
 
   const yTicks = 5;
   const yTickVals = Array.from({ length: yTicks }, (_, i) => sMax - (i / (yTicks - 1)) * sRange);
@@ -160,8 +169,9 @@ function RawStrengthChart({ data }) {
           {!hasTimeAxis ? <> <span className="raw-meta-muted">(x-axis fallback)</span></> : null}
         </span>
         <span>
-          <strong>Strength:</strong> min {Math.round(sMin)} · max {Math.round(sMax)} · latest{" "}
+          <strong>Strength:</strong> min {Math.round(strengthDataMin)} · max {Math.round(strengthDataMax)} · latest{" "}
           <strong>{Math.round(strengths[strengths.length - 1])}</strong>
+          <span className="raw-meta-muted"> (y-axis {sMin}–{sMax})</span>
         </span>
       </div>
 
