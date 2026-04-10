@@ -5,11 +5,11 @@ import EventLogTable from "./EventLogTable";
 import RawStrengthChart from "./RawStrengthChart";
 import PredictionBreakdownChart from "./PredictionBreakdownChart";
 import LabeledStrengthTimeline from "./LabeledStrengthTimeline";
-import LocatorLiveMap from "./LocatorLiveMap";
+// import LocatorLiveMap from "./LocatorLiveMap";
 
-const POLL_INTERVAL_MS = 5000;
-const RAW_FETCH_LIMIT = 200;
-const PROCESSED_FETCH_LIMIT = 80;
+const POLL_INTERVAL_MS = 10000;
+const RAW_FETCH_LIMIT = 5;
+const PROCESSED_FETCH_LIMIT = 5;
 const EVENT_LOG_ROWS = 5;
 
 function App() {
@@ -123,11 +123,13 @@ function App() {
         <LabeledStrengthTimeline rawRows={rawRows} processedRows={processedRows} />
       </div>
 
+      {/* Live locator map (SSE/MQTT) — disabled
       {activeModeCard === "FIND" ? (
         <div className="bottom-row">
           <LocatorLiveMap />
         </div>
       ) : null}
+      */}
 
       <div className="bottom-row">
         <EventLogTable events={processedRows.slice(0, EVENT_LOG_ROWS)} />

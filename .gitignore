@@ -3,3 +3,5 @@
 pyproject.toml
 uv.lock
 myenv/
+pc/cloud_u1raw.db
+pc/cloud_u1fea.db
