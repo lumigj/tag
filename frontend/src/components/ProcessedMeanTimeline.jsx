@@ -36,7 +36,7 @@ function ProcessedMeanTimeline({ processedRows }) {
   if (!processedRows?.length) {
     return (
       <div className="card">
-        <h2>Processed mean vs time</h2>
+        <h2>Average strength vs time</h2>
         <p>No processed predictions yet.</p>
       </div>
     );
@@ -64,7 +64,7 @@ function ProcessedMeanTimeline({ processedRows }) {
   if (!points.length) {
     return (
       <div className="card">
-        <h2>Processed mean vs time</h2>
+        <h2>Average strength vs time</h2>
         <p>Unable to parse timestamps or mean values from processed_data.</p>
       </div>
     );
@@ -108,7 +108,7 @@ function ProcessedMeanTimeline({ processedRows }) {
 
   return (
     <div className="card">
-      <h2>Processed mean vs time</h2>
+      <h2>Average strength vs time</h2>
       <p className="timeline-note">
         X: <code>processed_data.timestamp</code> · Y: <code>mean</code> · Labels show ML <code>label</code> per row.
       </p>

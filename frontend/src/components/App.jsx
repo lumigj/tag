@@ -4,7 +4,7 @@ import DeviceStatusCard from "./DeviceStatusCard";
 import EventLogTable from "./EventLogTable";
 import RawStrengthChart from "./RawStrengthChart";
 import PredictionBreakdownChart from "./PredictionBreakdownChart";
-import LabeledStrengthTimeline from "./LabeledStrengthTimeline";
+// import LabeledStrengthTimeline from "./LabeledStrengthTimeline";
 import ProcessedMeanTimeline from "./ProcessedMeanTimeline";
 // import LocatorLiveMap from "./LocatorLiveMap";
 
@@ -120,9 +120,11 @@ function App() {
         <RawStrengthChart data={rawRows} />
       </div>
 
+      {/* Strength timeline (raw + processed markers) — disabled
       <div className="bottom-row">
         <LabeledStrengthTimeline rawRows={rawRows} processedRows={processedRows} />
       </div>
+      */}
 
       <div className="bottom-row">
         <ProcessedMeanTimeline processedRows={processedRows} />
