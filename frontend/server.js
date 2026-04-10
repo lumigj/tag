@@ -223,6 +223,22 @@ function clampLimit(value, defaultLimit = 100, maxLimit = 1000) {
   return Math.min(parsed, maxLimit);
 }
 
+function decodeSqliteIntBuffer(value) {
+  if (!Buffer.isBuffer(value)) return value;
+  if (value.length === 8) {
+    return Number(value.readBigInt64LE(0));
+  }
+  return value;
+}
+
+function normalizeProcessedRow(row) {
+  if (!row) return row;
+  return {
+    ...row,
+    zcr: decodeSqliteIntBuffer(row.zcr),
+  };
+}
+
 function safeIdentifier(name, fallback) {
   const input = String(name || fallback);
   if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(input)) {
@@ -287,7 +303,7 @@ app.get("/api/raw/latest", async (req, res) => {
         [limit],
         (err, data) => {
           if (err) return fail(err);
-          done(data.reverse());
+          done(data.reverse().map(normalizeProcessedRow));
         }
       );
     });
