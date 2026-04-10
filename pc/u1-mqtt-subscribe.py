@@ -79,9 +79,7 @@ def save_processed_data(features, label):
     c = conn.cursor()
 
     c.execute("""
-        INSERT INTO processed_data (
-            timestamp, mean, std, max, min, p2p, zcr,
-            max_abs_diff, initial_delta, label)
+        INSERT INTO processed_data (timestamp, mean, std, max, min, p2p, zcr, max_abs_diff, initial_delta, label)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
         features["timestamp"],
@@ -254,7 +252,7 @@ def run_mqtt():
 	broker = 'broker.emqx.io'
 	port = 1883
 	topic = '/is4151-group04/usecase1'
-	client_id = 'pc_u1_receiver'
+	client_id = f'pc_u1_receiver_{random.randint(0, 100)}'
 	username = 'emqx'
 	password = 'public'
 
