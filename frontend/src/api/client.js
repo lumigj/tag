@@ -17,3 +17,7 @@ export async function getRawLatest(limit = 120) {
 export async function getProcessedLatest(limit = 80) {
   return request(`/api/processed/latest?limit=${limit}`);
 }
+
+export async function getLocatorLatest() {
+  return request("/api/locator/latest");
+}

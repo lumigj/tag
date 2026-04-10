@@ -5,6 +5,7 @@ import EventLogTable from "./EventLogTable";
 import RawStrengthChart from "./RawStrengthChart";
 import PredictionBreakdownChart from "./PredictionBreakdownChart";
 import LabeledStrengthTimeline from "./LabeledStrengthTimeline";
+import LocatorLiveMap from "./LocatorLiveMap";
 
 function App() {
   const [deviceState, setDeviceState] = useState(null);
@@ -116,6 +117,12 @@ function App() {
       <div className="bottom-row">
         <LabeledStrengthTimeline rawRows={rawRows} processedRows={processedRows} />
       </div>
+
+      {activeModeCard === "FIND" ? (
+        <div className="bottom-row">
+          <LocatorLiveMap />
+        </div>
+      ) : null}
 
       <div className="bottom-row">
         <EventLogTable events={processedRows} />
