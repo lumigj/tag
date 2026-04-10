@@ -6,7 +6,7 @@ import RawStrengthChart from "./RawStrengthChart";
 import PredictionBreakdownChart from "./PredictionBreakdownChart";
 // import LabeledStrengthTimeline from "./LabeledStrengthTimeline";
 import ProcessedMeanTimeline from "./ProcessedMeanTimeline";
-// import LocatorLiveMap from "./LocatorLiveMap";
+import LocatorLiveMap from "./LocatorLiveMap";
 
 const POLL_INTERVAL_MS = 10000;
 const RAW_FETCH_LIMIT = 10;
@@ -130,13 +130,11 @@ function App() {
         <ProcessedMeanTimeline processedRows={processedRows} />
       </div>
 
-      {/* Live locator map (SSE/MQTT) — disabled
       {activeModeCard === "FIND" ? (
         <div className="bottom-row">
           <LocatorLiveMap />
         </div>
       ) : null}
-      */}
 
       <div className="bottom-row">
         <EventLogTable events={processedRows.slice(0, EVENT_LOG_ROWS)} />
