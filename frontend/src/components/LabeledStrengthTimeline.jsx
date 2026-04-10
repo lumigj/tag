@@ -1,3 +1,7 @@
+/** Fixed strength y-axis (matches RawStrengthChart). */
+const STRENGTH_AXIS_MIN = 0;
+const STRENGTH_AXIS_MAX = 3000;
+
 function parseTimestamp(value) {
   if (value === null || value === undefined) return null;
   if (typeof value === "number") {
@@ -136,10 +140,10 @@ function LabeledStrengthTimeline({ rawRows, processedRows }) {
   const rawMax = rawPoints[rawPoints.length - 1].timeMs;
   const minX = rawMin;
   const maxX = rawMax;
-  const minY = Math.min(...rawPoints.map((p) => p.strength));
-  const maxY = Math.max(...rawPoints.map((p) => p.strength));
+  const minY = STRENGTH_AXIS_MIN;
+  const maxY = STRENGTH_AXIS_MAX;
   const xRange = maxX - minX || 1;
-  const yRange = maxY - minY || 1;
+  const yRange = maxY - minY;
   const byCountInner = rawPoints.length * 18;
   const byTimeInner = (xRange / 1000) * timePxPerSecond;
   const innerPlotW = Math.max(
@@ -150,8 +154,10 @@ function LabeledStrengthTimeline({ rawRows, processedRows }) {
 
   const toSvgX = (timeMs) => chartLeft + ((timeMs - minX) / xRange) * innerPlotW;
   const plotRightX = chartLeft + innerPlotW;
-  const toSvgY = (strength) =>
-    height - chartBottom - ((strength - minY) / yRange) * (height - chartTop - chartBottom);
+  const toSvgY = (strength) => {
+    const clamped = Math.min(maxY, Math.max(minY, strength));
+    return height - chartBottom - ((clamped - minY) / yRange) * (height - chartTop - chartBottom);
+  };
 
   const polyline = rawPoints
     .map((p) => `${toSvgX(p.timeMs)},${toSvgY(p.strength)}`)
