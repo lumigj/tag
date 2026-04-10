@@ -60,7 +60,7 @@ function EventLogTable({ events }) {
               <td>{Number(event.mean).toFixed(3)}</td>
               <td>{Number(event.std).toFixed(3)}</td>
               <td>{Number(event.p2p).toFixed(3)}</td>
-              <td>{formatZcr(event.zcr)}</td>
+              {/* <td>{formatZcr(event.zcr)}</td> */}
             </tr>
           ))}
         </tbody>
