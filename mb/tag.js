@@ -5,7 +5,7 @@ radio.onReceivedNumber(function (receivedNumber) {
     }
     updateBeaconRssi(receivedNumber, radio.receivedPacket(RadioPacketProperty.SignalStrength))
 })
-function updateBeaconRssi (beaconId: number, rssi: number) {
+function updateBeaconRssi(beaconId: number, rssi: number) {
     if (beaconId == 1) {
         rawRssi1 = rssi
         lastSeen1 = input.runningTime()
@@ -19,14 +19,14 @@ function updateBeaconRssi (beaconId: number, rssi: number) {
     rawRssi3 = rssi
     lastSeen3 = input.runningTime()
 }
-function hasFreshFix () {
+function hasFreshFix() {
     now = input.runningTime()
     if (trackingMode == TRIANGLE_MODE) {
         return lastSeen1 > 0 && lastSeen2 > 0 && lastSeen3 > 0 && now - lastSeen1 <= BEACON_TIMEOUT_MS && now - lastSeen2 <= BEACON_TIMEOUT_MS && now - lastSeen3 <= BEACON_TIMEOUT_MS
     }
     return lastSeen1 > 0 && lastSeen2 > 0 && now - lastSeen1 <= BEACON_TIMEOUT_MS && now - lastSeen2 <= BEACON_TIMEOUT_MS
 }
-function drawModeIndicator () {
+function drawModeIndicator() {
     basic.clearScreen()
     if (trackingMode == TRIANGLE_MODE) {
         led.plot(1, 0)
@@ -80,8 +80,8 @@ LINE_MODE = 2
 TRIANGLE_MODE = 3
 MODE_DISPLAY_MS = 900
 BEACON_TIMEOUT_MS = 700
-let MOTION_SEND_INTERVAL_MS = 100
-let LOCATOR_SEND_INTERVAL_MS = 350
+let MOTION_SEND_INTERVAL_MS = 90
+let LOCATOR_SEND_INTERVAL_MS = 400
 let LOOP_TICK_MS = 10
 rawRssi1 = -95
 rawRssi2 = -95

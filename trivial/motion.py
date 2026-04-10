@@ -138,6 +138,7 @@ try:
                 current_time = time.time()
                 if current_time - last_commit_time >= COMMIT_INTERVAL:
                      conn.commit()
+                     last_commit_time = current_time
                      display_time = full_row['timestamp'].split('T')[-1][:8]
                      print(f"Batch committed to SQLite at {display_time}")
                 
