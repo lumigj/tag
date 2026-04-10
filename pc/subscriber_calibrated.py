@@ -16,7 +16,7 @@ from matplotlib.axes import Axes
 from matplotlib.collections import PathCollection
 from matplotlib.lines import Line2D
 from matplotlib.text import Text
-from matplotlib.widgets import Button
+from matplotlib.widgets import Button, TextBox
 
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -26,11 +26,10 @@ from pc.locator_core import (
     TagSample,
     active_labels_for_mode,
     default_beacon_coords,
-    empty_calibration_state,
-    estimate_position,
     filter_sample,
     layout_center,
     new_filter_states_by_mode,
+    proportional_triangle_position,
     sample_from_message,
 )
 
@@ -40,10 +39,6 @@ BROKER_PORT = 1883
 TOPIC_PREFIX = "/is4151-is5451/tag-locator/v1"
 USERNAME = "emqx"
 PASSWORD = "public"
-
-
-def new_layout_capture_states() -> dict[str, tuple[float, float] | None]:
-    return {label: None for label in BEACON_ORDER}
 
 
 def on_connect(client, userdata, flags, reason_code, properties=None):
@@ -65,87 +60,34 @@ def on_message(client, userdata, msg):
     if payload.get("tag_id") != userdata["tag_id"]:
         return
 
-    message_type = payload.get("type")
-    if message_type == "tag_sample":
-        sample = sample_from_message(payload)
-        if sample is None:
-            print("Skipping malformed sample payload on {}".format(msg.topic))
-            return
-        userdata["sample_queue"].put(sample)
+    if payload.get("type") != "tag_sample":
         return
+
+    sample = sample_from_message(payload)
+    if sample is None:
+        print("Skipping malformed sample payload on {}".format(msg.topic))
+        return
+    userdata["sample_queue"].put(sample)
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Subscribe to MQTT locator samples, estimate position, and render the live plot."
+        description="Subscribe to MQTT locator samples and use abs(rssi) - offset positioning."
     )
     parser.add_argument("--broker", default=BROKER, help="MQTT broker hostname")
     parser.add_argument("--broker-port", type=int, default=BROKER_PORT, help="MQTT broker port")
     parser.add_argument("--topic-prefix", default=TOPIC_PREFIX, help="MQTT topic prefix")
     parser.add_argument("--tag-id", default="tag-1", help="Tag identifier appended to the MQTT topic")
     parser.add_argument("--history", type=int, default=20, help="Number of past points to keep on screen")
-    parser.add_argument(
-        "--save",
-        type=Path,
-        help="Optional CSV file path to append raw samples while plotting",
-    )
+    parser.add_argument("--save", type=Path, help="Optional CSV file path to append raw samples while plotting")
     parser.add_argument("--headless", action="store_true", help="Consume MQTT samples and print estimates without opening the plot window")
     parser.add_argument("--duration", type=float, default=8.0, help="Headless runtime in seconds")
+    parser.add_argument("--offset", type=float, default=0.0, help="Initial abs(rssi) offset to subtract before solving")
     return parser
 
 
 def build_sample_topic(topic_prefix: str, tag_id: str) -> str:
     return "{}/{}/sample".format(topic_prefix.rstrip("/"), tag_id)
-
-
-def update_overlay_layout(
-    mode: int,
-    overlay_coords: dict[int, dict[str, tuple[float, float]] | None],
-    overlay_line_artists: list[Line2D],
-) -> None:
-    for line in overlay_line_artists:
-        line.set_data([], [])
-
-    active_overlay = overlay_coords.get(mode)
-    if active_overlay is None:
-        return
-
-    if mode == 3:
-        overlay_line_artists[0].set_data(
-            [active_overlay["B1"][0], active_overlay["B2"][0]],
-            [active_overlay["B1"][1], active_overlay["B2"][1]],
-        )
-        overlay_line_artists[1].set_data(
-            [active_overlay["B1"][0], active_overlay["B3"][0]],
-            [active_overlay["B1"][1], active_overlay["B3"][1]],
-        )
-        overlay_line_artists[2].set_data(
-            [active_overlay["B2"][0], active_overlay["B3"][0]],
-            [active_overlay["B2"][1], active_overlay["B3"][1]],
-        )
-    else:
-        overlay_line_artists[0].set_data(
-            [active_overlay["B1"][0], active_overlay["B2"][0]],
-            [active_overlay["B1"][1], active_overlay["B2"][1]],
-        )
-
-
-def set_base_visibility(
-    visible: bool,
-    line_artists: list[Line2D],
-    beacon_scatter: PathCollection,
-    beacon_labels: dict[str, Text],
-) -> None:
-    for line in line_artists:
-        line.set_visible(visible)
-    beacon_scatter.set_visible(visible)
-    for label in beacon_labels.values():
-        label.set_visible(visible)
-
-
-def set_overlay_visibility(visible: bool, overlay_line_artists: list[Line2D]) -> None:
-    for line in overlay_line_artists:
-        line.set_visible(visible)
 
 
 def update_layout(
@@ -155,7 +97,6 @@ def update_layout(
     beacon_scatter: PathCollection,
     beacon_labels: dict[str, Text],
     mode_text: Text,
-    capture_buttons: dict[str, Button],
     ax: Axes,
 ) -> None:
     for line in line_artists:
@@ -178,18 +119,18 @@ def update_layout(
             [beacon_coords["B2"][1], beacon_coords["B3"][1]],
         )
         beacon_scatter.set_color(["#1d3557", "#1d3557", "#1d3557"])
-        mode_text.set_text("TRIANGLE MODE: B1-B2-B3")
+        mode_text.set_text("TRIANGLE MODE: OFFSET RAW")
         mode_text.set_color("#2a9d8f")
-        ax.set_title("Triangle mode uses B1, B2, and B3", pad=18)
+        ax.set_title("Distance proxy = max(abs(rssi) - offset, 0)", pad=18)
     else:
         line_artists[0].set_data(
             [beacon_coords["B1"][0], beacon_coords["B2"][0]],
             [beacon_coords["B1"][1], beacon_coords["B2"][1]],
         )
         beacon_scatter.set_color(["#1d3557", "#1d3557", "#cbd5e1"])
-        mode_text.set_text("LINE MODE: B1-B2 ONLY")
+        mode_text.set_text("LINE MODE: OFFSET RAW")
         mode_text.set_color("#457b9d")
-        ax.set_title("Line mode uses B1 and B2; B3 is shown for reference", pad=18)
+        ax.set_title("Distance proxy = max(abs(rssi) - offset, 0)", pad=18)
 
     for label, text in beacon_labels.items():
         x, y = beacon_coords[label]
@@ -199,16 +140,8 @@ def update_layout(
         else:
             text.set_position((x, y + 0.07))
             text.set_va("bottom")
-        if mode == 2 and label == "B3":
-            text.set_color("#8a8f98")
-        else:
-            text.set_color("black")
+        text.set_color("#8a8f98" if mode == 2 and label == "B3" else "black")
         text.set_visible(True)
-
-    active_labels = set(active_labels_for_mode(mode))
-    for label, button in capture_buttons.items():
-        button.ax.set_facecolor("#d9f2ec" if label in active_labels else "#e5e7eb")
-        button.label.set_color("black" if label in active_labels else "#8a8f98")
 
 
 def consume_incoming_messages(
@@ -241,6 +174,40 @@ def consume_incoming_messages(
             csv_file.flush()
 
 
+def offset_distance_proxy(rssi: int, offset: float) -> float:
+    proxy = abs(rssi) - offset
+    if proxy < 0.0:
+        return 0.0
+    return proxy
+
+
+def estimate_offset_position(
+    sample: TagSample,
+    beacon_coords: dict[str, tuple[float, float]],
+    offset: float,
+) -> tuple[float, float, str]:
+    if sample.mode == 3 and sample.rssi3 is not None:
+        distances = {
+            "B1": offset_distance_proxy(sample.rssi1, offset),
+            "B2": offset_distance_proxy(sample.rssi2, offset),
+            "B3": offset_distance_proxy(sample.rssi3, offset),
+        }
+        position = proportional_triangle_position(beacon_coords, distances)
+        return position[0], position[1], "OFF-B123"
+
+    distance1 = offset_distance_proxy(sample.rssi1, offset)
+    distance2 = offset_distance_proxy(sample.rssi2, offset)
+    total = distance1 + distance2
+    if total <= 0:
+        center = layout_center(beacon_coords, 2)
+        return center[0], center[1], "OFF-B12"
+
+    ratio_from_b1 = distance1 / total
+    x = beacon_coords["B1"][0] + (beacon_coords["B2"][0] - beacon_coords["B1"][0]) * ratio_from_b1
+    y = beacon_coords["B1"][1] + (beacon_coords["B2"][1] - beacon_coords["B1"][1]) * ratio_from_b1
+    return round(x, 4), round(y, 4), "OFF-B12"
+
+
 def run() -> int:
     args = build_parser().parse_args()
 
@@ -267,12 +234,9 @@ def run() -> int:
 
     history: deque[TagSample] = deque(maxlen=args.history)
     latest_sample_box: dict[str, TagSample | None] = {"sample": None}
-    calibration_by_mode = empty_calibration_state()
     filter_states_by_mode = new_filter_states_by_mode()
-    default_coords = default_beacon_coords()
-    remembered_layout_coords = new_layout_capture_states()
-    applied_layout_coords_by_mode: dict[int, dict[str, tuple[float, float]] | None] = {2: None, 3: None}
-    visibility_state = {"base": True, "overlay": True}
+    beacon_coords = default_beacon_coords()
+    offset_box = {"value": float(args.offset)}
 
     csv_file = None
     if args.save:
@@ -283,7 +247,7 @@ def run() -> int:
 
     try:
         if args.headless:
-            print("Running headless subscriber for {:.1f} seconds...".format(args.duration))
+            print("Running offset subscriber for {:.1f} seconds with offset={}...".format(args.duration, offset_box["value"]))
             deadline = time.time() + args.duration
             last_reported = 0
 
@@ -300,13 +264,14 @@ def run() -> int:
                     latest_sample = history[-1]
                     latest_key = int(latest_sample.timestamp * 1000)
                     if latest_key != last_reported:
-                        estimate = estimate_position(latest_sample, calibration_by_mode[latest_sample.mode], default_coords)
+                        estimate = estimate_offset_position(latest_sample, beacon_coords, offset_box["value"])
                         print(
-                            "mode={} estimate={} x={} y={} rssi=({}, {}, {})".format(
+                            "mode={} estimate={} x={} y={} offset={} rssi=({}, {}, {})".format(
                                 latest_sample.mode,
                                 estimate[2],
                                 estimate[0],
                                 estimate[1],
+                                offset_box["value"],
                                 latest_sample.rssi1,
                                 latest_sample.rssi2,
                                 latest_sample.rssi3,
@@ -318,9 +283,9 @@ def run() -> int:
 
             return 0
 
-        fig, ax = plt.subplots(figsize=(14.2, 9.8))
-        fig.subplots_adjust(left=0.23, right=0.96, bottom=0.42, top=0.84)
-        fig.canvas.manager.set_window_title("micro:bit locator (MQTT)")
+        fig, ax = plt.subplots(figsize=(19.5, 13.8))
+        fig.subplots_adjust(left=0.14, right=0.98, bottom=0.30, top=0.92)
+        fig.canvas.manager.set_window_title("micro:bit locator (MQTT, offset raw)")
         ax.set_xlim(0.09, 0.91)
         ax.set_ylim(0.07, 0.82)
         ax.set_xticks([])
@@ -332,11 +297,6 @@ def run() -> int:
             ax.plot([], [], color="#264653", linewidth=3, zorder=1)[0],
             ax.plot([], [], color="#264653", linewidth=3, zorder=1)[0],
         ]
-        overlay_line_artists = [
-            ax.plot([], [], color="#64748b", linewidth=1.2, zorder=2)[0],
-            ax.plot([], [], color="#64748b", linewidth=1.2, zorder=2)[0],
-            ax.plot([], [], color="#64748b", linewidth=1.2, zorder=2)[0],
-        ]
         beacon_scatter = ax.scatter([], [], s=[], c=[], marker="s", zorder=3)
         beacon_labels = {
             "B1": ax.text(0, 0, "B1", ha="center", va="bottom", fontsize=11, weight="bold"),
@@ -344,7 +304,7 @@ def run() -> int:
             "B3": ax.text(0, 0, "B3", ha="center", va="bottom", fontsize=11, weight="bold"),
         }
         trail_scatter = ax.scatter([], [], s=[], c=[], alpha=0.35, zorder=2)
-        initial_center = layout_center(default_coords, 3)
+        initial_center = layout_center(beacon_coords, 3)
         current_scatter = ax.scatter(
             [initial_center[0]],
             [initial_center[1]],
@@ -354,8 +314,8 @@ def run() -> int:
             zorder=4,
         )
         info_text = fig.text(
-            0.08,
-            0.76,
+            0.07,
+            0.81,
             "Waiting for MQTT tag data...",
             ha="left",
             va="top",
@@ -366,7 +326,7 @@ def run() -> int:
         )
         mode_text = fig.text(
             0.5,
-            0.875,
+            0.95,
             "",
             ha="center",
             va="center",
@@ -375,25 +335,21 @@ def run() -> int:
             bbox={"boxstyle": "round,pad=0.25", "facecolor": "white", "edgecolor": "#cbd5e1"},
         )
 
-        fig.text(0.08, 0.34, "Beacon Layout", ha="left", va="center", fontsize=11, weight="bold")
+        fig.text(0.07, 0.23, "Offset Method", ha="left", va="center", fontsize=11, weight="bold")
         fig.text(
-            0.08,
-            0.315,
-            "Cap buttons remember the current plotted tag position for that beacon.",
+            0.07,
+            0.205,
+            "Distance proxy = max(abs(rssi) - offset, 0). Enter offset and click Apply Offset.",
             ha="left",
             va="center",
             fontsize=9,
             color="#6b7280",
         )
-
-        capture_buttons = {
-            "B1": Button(fig.add_axes([0.08, 0.19, 0.12, 0.06]), "Cap B1"),
-            "B2": Button(fig.add_axes([0.22, 0.19, 0.12, 0.06]), "Cap B2"),
-            "B3": Button(fig.add_axes([0.36, 0.19, 0.12, 0.06]), "Cap B3"),
-        }
-        layout_status_text = fig.text(
-            0.55,
-            0.29,
+        offset_input = TextBox(fig.add_axes([0.07, 0.11, 0.12, 0.06]), "", initial=str(args.offset))
+        apply_offset_button = Button(fig.add_axes([0.21, 0.11, 0.16, 0.06]), "Apply Offset")
+        offset_status_text = fig.text(
+            0.42,
+            0.20,
             "",
             ha="left",
             va="top",
@@ -402,133 +358,49 @@ def run() -> int:
             linespacing=1.35,
             bbox={"boxstyle": "round,pad=0.3", "facecolor": "white", "edgecolor": "#adb5bd"},
         )
-        apply_layout_button = Button(fig.add_axes([0.08, 0.09, 0.18, 0.07]), "Apply Layout")
-        reset_layout_button = Button(fig.add_axes([0.29, 0.09, 0.18, 0.07]), "Reset Layout")
-        toggle_base_button = Button(fig.add_axes([0.55, 0.12, 0.16, 0.07]), "Hide Base")
-        toggle_overlay_button = Button(fig.add_axes([0.74, 0.12, 0.16, 0.07]), "Hide Overlay")
         fig.text(
-            0.08,
-            0.015,
-            "This does not affect the estimator. It only draws a thin overlay line or triangle.",
+            0.07,
+            0.03,
+            "This entrypoint does not use calibration. Use pc.subscriber for the overlay view.",
             ha="left",
             va="center",
             fontsize=9,
             color="#6b7280",
         )
 
-        def refresh_layout_status(mode: int) -> None:
-            active_labels = set(active_labels_for_mode(mode))
-            lines = []
-            for label in BEACON_ORDER:
-                remembered = remembered_layout_coords[label]
-                if remembered is None:
-                    capture_text = "--"
-                else:
-                    capture_text = "({:.2f},{:.2f})".format(remembered[0], remembered[1])
-                suffix = "" if label in active_labels else " idle"
-                lines.append("{} {:>12}{}".format(label + ":", capture_text, suffix))
-            layout_status_text.set_text("\n".join(lines))
-
-        def refresh_visibility_buttons() -> None:
-            toggle_base_button.label.set_text("Hide Base" if visibility_state["base"] else "Show Base")
-            toggle_overlay_button.label.set_text(
-                "Hide Overlay" if visibility_state["overlay"] else "Show Overlay"
+        def refresh_offset_status() -> None:
+            offset_status_text.set_text(
+                "offset = {}\nproxy example:\n-21 -> {}\n-50 -> {}".format(
+                    offset_box["value"],
+                    int(offset_distance_proxy(-21, offset_box["value"])),
+                    int(offset_distance_proxy(-50, offset_box["value"])),
+                )
             )
 
-        def apply_visibility_state() -> None:
-            set_base_visibility(visibility_state["base"], line_artists, beacon_scatter, beacon_labels)
-            set_overlay_visibility(visibility_state["overlay"], overlay_line_artists)
-
-        def capture_layout(label: str) -> None:
-            latest_sample = latest_sample_box["sample"]
-            if latest_sample is None:
+        def apply_offset(_event=None) -> None:
+            raw_value = offset_input.text.strip()
+            try:
+                offset_box["value"] = float(raw_value)
+            except ValueError:
+                print("Offset must be a number.")
                 return
-            if label == "B3" and latest_sample.mode != 3:
-                return
-            estimated_position = estimate_position(
-                latest_sample,
-                calibration_by_mode[latest_sample.mode],
-                default_coords,
-            )
-            remembered_layout_coords[label] = (estimated_position[0], estimated_position[1])
-            refresh_layout_status(latest_sample.mode)
+            refresh_offset_status()
             fig.canvas.draw_idle()
+            print("Applied offset {}.".format(offset_box["value"]))
 
-        def apply_layout(_event=None) -> None:
-            active_labels = active_labels_for_mode(current_mode)
-            missing = [label for label in active_labels if remembered_layout_coords[label] is None]
-            if missing:
-                print("Cannot apply layout yet. Capture these beacons first: {}".format(", ".join(missing)))
-                return
-
-            applied_layout_coords_by_mode[current_mode] = {
-                label: remembered_layout_coords[label]
-                for label in active_labels
-                if remembered_layout_coords[label] is not None
-            }
-            update_overlay_layout(current_mode, applied_layout_coords_by_mode, overlay_line_artists)
-            apply_visibility_state()
-            refresh_layout_status(current_mode)
-            fig.canvas.draw_idle()
-            print("Applied overlay layout for mode {} using {}.".format(current_mode, ", ".join(active_labels)))
-
-        def reset_layout(_event=None) -> None:
-            for label in BEACON_ORDER:
-                remembered_layout_coords[label] = None
-            applied_layout_coords_by_mode[2] = None
-            applied_layout_coords_by_mode[3] = None
-
-            update_layout(
-                current_mode,
-                default_coords,
-                line_artists,
-                beacon_scatter,
-                beacon_labels,
-                mode_text,
-                capture_buttons,
-                ax,
-            )
-            update_overlay_layout(current_mode, applied_layout_coords_by_mode, overlay_line_artists)
-            apply_visibility_state()
-            refresh_layout_status(current_mode)
-            fig.canvas.draw_idle()
-            print("Cleared overlay layout and remembered points.")
-
-        def toggle_base(_event=None) -> None:
-            visibility_state["base"] = not visibility_state["base"]
-            apply_visibility_state()
-            refresh_visibility_buttons()
-            fig.canvas.draw_idle()
-
-        def toggle_overlay(_event=None) -> None:
-            visibility_state["overlay"] = not visibility_state["overlay"]
-            apply_visibility_state()
-            refresh_visibility_buttons()
-            fig.canvas.draw_idle()
-
-        capture_buttons["B1"].on_clicked(lambda _event: capture_layout("B1"))
-        capture_buttons["B2"].on_clicked(lambda _event: capture_layout("B2"))
-        capture_buttons["B3"].on_clicked(lambda _event: capture_layout("B3"))
-        apply_layout_button.on_clicked(apply_layout)
-        reset_layout_button.on_clicked(reset_layout)
-        toggle_base_button.on_clicked(toggle_base)
-        toggle_overlay_button.on_clicked(toggle_overlay)
+        apply_offset_button.on_clicked(apply_offset)
 
         current_mode = 2
         update_layout(
             current_mode,
-            default_coords,
+            beacon_coords,
             line_artists,
             beacon_scatter,
             beacon_labels,
             mode_text,
-            capture_buttons,
             ax,
         )
-        update_overlay_layout(current_mode, applied_layout_coords_by_mode, overlay_line_artists)
-        apply_visibility_state()
-        refresh_layout_status(current_mode)
-        refresh_visibility_buttons()
+        refresh_offset_status()
 
         def update(_frame: int):
             nonlocal current_mode
@@ -549,21 +421,16 @@ def run() -> int:
                 current_mode = latest.mode
                 update_layout(
                     current_mode,
-                    default_coords,
+                    beacon_coords,
                     line_artists,
                     beacon_scatter,
                     beacon_labels,
                     mode_text,
-                    capture_buttons,
                     ax,
                 )
-                update_overlay_layout(current_mode, applied_layout_coords_by_mode, overlay_line_artists)
-                apply_visibility_state()
-                refresh_layout_status(current_mode)
 
-            current_calibration = calibration_by_mode[current_mode]
             positions = [
-                estimate_position(sample, current_calibration, default_coords)
+                estimate_offset_position(sample, beacon_coords, offset_box["value"])
                 for sample in history
                 if sample.mode == current_mode
             ]
@@ -585,10 +452,7 @@ def run() -> int:
 
             current_scatter.set_offsets([[latest_position[0], latest_position[1]]])
             current_scatter.set_sizes([300])
-            if latest_position[2].startswith("CAL"):
-                current_scatter.set_color(["#2a9d8f"])
-            else:
-                current_scatter.set_color(["#457b9d"])
+            current_scatter.set_color(["#e76f51"])
 
             active_layout = " ".join(active_labels_for_mode(current_mode))
             info_text.set_text(
@@ -597,17 +461,15 @@ def run() -> int:
                 "rssi B1  = {:>5}\n"
                 "rssi B2  = {:>5}\n"
                 "rssi B3  = {:>5}\n"
-                "layout   = {:>8}\n"
-                "filter   = med{} gate{} x{}".format(
+                "offset   = {:>8}\n"
+                "layout   = {:>8}".format(
                     "TRIANGLE" if current_mode == 3 else "LINE",
                     latest_position[2],
                     latest_sample.rssi1,
                     latest_sample.rssi2,
                     "--" if latest_sample.rssi3 is None else latest_sample.rssi3,
+                    offset_box["value"],
                     active_layout,
-                    5,
-                    7,
-                    3,
                 )
             )
             return current_scatter, trail_scatter, info_text

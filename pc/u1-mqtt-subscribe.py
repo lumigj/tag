@@ -78,19 +78,24 @@ def save_processed_data(features, label):
     conn = sqlite3.connect(DB_F)
     c = conn.cursor()
 
+    def to_python_scalar(value):
+        if hasattr(value, "item"):
+            value = value.item()
+        return value
+
     c.execute("""
         INSERT INTO processed_data (timestamp, mean, std, max, min, p2p, zcr, max_abs_diff, initial_delta, label)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
         features["timestamp"],
-        features["mean"],
-        features["std"],
-        features["max"],
-        features["min"],
-        features["p2p"],
-        features["zcr"],
-        features["max_abs_diff"],
-        features["initial_delta"],
+        to_python_scalar(features["mean"]),
+        to_python_scalar(features["std"]),
+        to_python_scalar(features["max"]),
+        to_python_scalar(features["min"]),
+        to_python_scalar(features["p2p"]),
+        to_python_scalar(features["zcr"]),
+        to_python_scalar(features["max_abs_diff"]),
+        to_python_scalar(features["initial_delta"]),
         label,
     ))
 

@@ -2,6 +2,18 @@ function formatZcr(value) {
   if (value === null || value === undefined) return "—";
   if (typeof value === "number" && Number.isFinite(value)) return String(value);
   if (typeof value === "string") return value;
+  if (
+    typeof value === "object"
+    && value.type === "Buffer"
+    && Array.isArray(value.data)
+    && value.data.length === 8
+  ) {
+    let result = 0n;
+    for (let i = 0; i < value.data.length; i += 1) {
+      result += BigInt(value.data[i]) << (8n * BigInt(i));
+    }
+    return String(Number(result));
+  }
   if (typeof value === "object") return JSON.stringify(value);
   const n = Number(value);
   return Number.isFinite(n) ? String(n) : String(value);
