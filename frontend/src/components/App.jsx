@@ -9,9 +9,9 @@ import ProcessedMeanTimeline from "./ProcessedMeanTimeline";
 // import LocatorLiveMap from "./LocatorLiveMap";
 
 const POLL_INTERVAL_MS = 10000;
-const RAW_FETCH_LIMIT = 5;
-const PROCESSED_FETCH_LIMIT = 5;
-const EVENT_LOG_ROWS = 5;
+const RAW_FETCH_LIMIT = 10;
+const PROCESSED_FETCH_LIMIT = 10;
+const EVENT_LOG_ROWS = 10;
 
 function App() {
   const [deviceState, setDeviceState] = useState(null);
