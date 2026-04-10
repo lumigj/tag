@@ -49,7 +49,8 @@ function EventLogTable({ events }) {
   return (
     <div className="card">
       <h2>Latest Predictions</h2>
-      <table>
+      <div className="event-log-scroll">
+      <table className="event-log-table">
         <thead>
           <tr>
             <th>Time</th>
@@ -58,6 +59,10 @@ function EventLogTable({ events }) {
             <th>Std</th>
             <th>P2P</th>
             <th>ZCR</th>
+            <th>Max Abs Diff</th>
+            <th>Initial Delta</th>
+            <th>Min</th>
+            <th>Max</th>  
           </tr>
         </thead>
         <tbody>
@@ -69,14 +74,19 @@ function EventLogTable({ events }) {
                   {event.label}
                 </span>
               </td>
-              <td>{Number(event.mean).toFixed(3)}</td>
-              <td>{Number(event.std).toFixed(3)}</td>
-              <td>{Number(event.p2p).toFixed(3)}</td>
+              <td>{Number(event.mean).toFixed(4)}</td>
+              <td>{Number(event.std).toFixed(4)}</td>
+              <td>{Number(event.p2p).toFixed(4)}</td>
               <td>{formatZcr(event.zcr)}</td>
+              <td>{Number(event.max_abs_diff).toFixed(4)}</td>
+              <td>{Number(event.initial_delta).toFixed(4)}</td>
+              <td>{Number(event.min).toFixed(4)}</td>
+              <td>{Number(event.max).toFixed(4)}</td>
             </tr>
           ))}
         </tbody>
       </table>
+      </div>
     </div>
   );
 }

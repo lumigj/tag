@@ -231,6 +231,29 @@ body {
     background: #fff7ed;
   }
 
+  .event-log-scroll {
+    width: 100%;
+    max-width: 100%;
+    overflow-x: auto;
+    overflow-y: hidden;
+    margin-top: 8px;
+    border-radius: 8px;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior-x: contain;
+  }
+
+  .event-log-table {
+    width: max-content;
+    min-width: 100%;
+    border-collapse: collapse;
+  }
+
+  .event-log-table th,
+  .event-log-table td {
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+  }
+
   .raw-strength-card h2 {
     margin-top: 0;
   }
