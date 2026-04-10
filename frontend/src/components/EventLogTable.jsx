@@ -1,5 +1,17 @@
+function formatZcr(value) {
+  if (value === null || value === undefined) return "—";
+  if (typeof value === "number" && Number.isFinite(value)) return String(value);
+  if (typeof value === "string") return value;
+  if (typeof value === "object") return JSON.stringify(value);
+  const n = Number(value);
+  return Number.isFinite(n) ? String(n) : String(value);
+}
+
 function EventLogTable({ events }) {
   function formatDateTime(value) {
+    if (value !== null && typeof value === "object") {
+      return JSON.stringify(value);
+    }
     const parsed = Date.parse(String(value));
     if (!Number.isNaN(parsed)) {
       return new Date(parsed).toLocaleString([], {
@@ -48,7 +60,7 @@ function EventLogTable({ events }) {
               <td>{Number(event.mean).toFixed(3)}</td>
               <td>{Number(event.std).toFixed(3)}</td>
               <td>{Number(event.p2p).toFixed(3)}</td>
-              <td>{event.zcr}</td>
+              <td>{formatZcr(event.zcr)}</td>
             </tr>
           ))}
         </tbody>
