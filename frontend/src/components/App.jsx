@@ -47,6 +47,22 @@ function App() {
     .slice(0, 6);
   const latestRaw = rawRows.length ? rawRows[rawRows.length - 1] : null;
 
+  function formatDateTime(value) {
+    const parsed = Date.parse(String(value));
+    if (!Number.isNaN(parsed)) {
+      return new Date(parsed).toLocaleString([], {
+        year: "2-digit",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+        hour12: false,
+      });
+    }
+    return String(value);
+  }
+
   return (
     <div className="container">
       <h1>Smart Anti-Loss / Anti-Theft Dashboard</h1>
@@ -63,7 +79,13 @@ function App() {
             >
               <h3>LIVE</h3>
               {liveEvents.length ? (
-                <p>Detected events: {liveEvents.map((event) => event.label).join(", ")}</p>
+                <p>
+                  Reporting {liveEvents.length} event(s):
+                  {" "}
+                  {liveEvents
+                    .map((event) => `${event.label}@${formatDateTime(event.timestamp)}`)
+                    .join(", ")}
+                </p>
               ) : (
                 <p>No drop/pickup event reported.</p>
               )}
