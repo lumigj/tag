@@ -7,6 +7,11 @@ import PredictionBreakdownChart from "./PredictionBreakdownChart";
 import LabeledStrengthTimeline from "./LabeledStrengthTimeline";
 import LocatorLiveMap from "./LocatorLiveMap";
 
+const POLL_INTERVAL_MS = 5000;
+const RAW_FETCH_LIMIT = 200;
+const PROCESSED_FETCH_LIMIT = 80;
+const EVENT_LOG_ROWS = 5;
+
 function App() {
   const [deviceState, setDeviceState] = useState(null);
   const [processedRows, setProcessedRows] = useState([]);
@@ -21,8 +26,8 @@ function App() {
       try {
         const [summary, raw, processed] = await Promise.all([
           getSummary(),
-          getRawLatest(1200),
-          getProcessedLatest(200),
+          getRawLatest(RAW_FETCH_LIMIT),
+          getProcessedLatest(PROCESSED_FETCH_LIMIT),
         ]);
         if (!active) return;
         setDeviceState(summary);
@@ -36,7 +41,7 @@ function App() {
     }
 
     refresh();
-    const timer = setInterval(refresh, 1000);
+    const timer = setInterval(refresh, POLL_INTERVAL_MS);
     return () => {
       active = false;
       clearInterval(timer);
@@ -125,7 +130,7 @@ function App() {
       ) : null}
 
       <div className="bottom-row">
-        <EventLogTable events={processedRows} />
+        <EventLogTable events={processedRows.slice(0, EVENT_LOG_ROWS)} />
       </div>
     </div>
   );
