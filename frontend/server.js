@@ -48,7 +48,15 @@ const initialLocatorOffsets = normalizeBeaconOffsets({
 });
 
 app.use(cors());
-app.use(express.json());
+app.use(
+  express.json({
+    verify: (req, _res, buf) => {
+      if (buf?.length) {
+        req.rawLocatorBody = buf.toString("utf8");
+      }
+    },
+  })
+);
 
 const BEACON_COORDS = defaultBeaconCoords();
 const locatorFilterStatesByMode = newFilterStatesByMode();
@@ -362,8 +370,35 @@ app.get("/api/locator/latest", (_req, res) => {
   res.json(locatorSnapshot());
 });
 
+function flattenLocatorOffsetPostBody(raw) {
+  const body = raw && typeof raw === "object" && !Array.isArray(raw) ? { ...raw } : {};
+  const mergeBeacon = (src) => {
+    if (!src || typeof src !== "object" || Array.isArray(src)) return;
+    for (const k of ["B1", "B2", "B3"]) {
+      if (!Object.prototype.hasOwnProperty.call(src, k)) continue;
+      body[k] = src[k];
+    }
+  };
+  mergeBeacon(body.offsets);
+  mergeBeacon(body.offset);
+  return body;
+}
+
 app.post("/api/locator/offset", (req, res) => {
-  const body = req.body && typeof req.body === "object" && !Array.isArray(req.body) ? req.body : {};
+  let raw = req.body;
+  const bodyLooksEmpty =
+    raw === undefined ||
+    raw === null ||
+    (typeof raw === "object" && !Array.isArray(raw) && Object.keys(raw).length === 0);
+  if (bodyLooksEmpty && typeof req.rawLocatorBody === "string" && req.rawLocatorBody.trim()) {
+    try {
+      raw = JSON.parse(req.rawLocatorBody);
+    } catch {
+      res.status(400).json({ error: "Invalid JSON body" });
+      return;
+    }
+  }
+  const body = flattenLocatorOffsetPostBody(raw);
   let next = { ...locatorState.offsets };
 
   const nested = body.offsets && typeof body.offsets === "object" && !Array.isArray(body.offsets) ? body.offsets : null;
@@ -384,7 +419,12 @@ app.post("/api/locator/offset", (req, res) => {
       }
       next[k] = n;
     }
-  } else if (body.offset !== undefined && body.offset !== null && String(body.offset).trim() !== "") {
+  } else if (
+    body.offset !== undefined &&
+    body.offset !== null &&
+    (typeof body.offset === "number" || typeof body.offset === "string") &&
+    String(body.offset).trim() !== ""
+  ) {
     const v = Number(String(body.offset).trim());
     if (!Number.isFinite(v)) {
       res.status(400).json({ error: "offset must be a number" });
