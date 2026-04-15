@@ -363,27 +363,34 @@ app.get("/api/locator/latest", (_req, res) => {
 });
 
 app.post("/api/locator/offset", (req, res) => {
-  const body = req.body && typeof req.body === "object" ? req.body : {};
+  const body = req.body && typeof req.body === "object" && !Array.isArray(req.body) ? req.body : {};
   let next = { ...locatorState.offsets };
 
-  if (body.offset !== undefined && body.offset !== null && String(body.offset).trim() !== "") {
-    const v = Number(body.offset);
-    if (!Number.isFinite(v)) {
-      res.status(400).json({ error: "offset must be a number" });
-      return;
-    }
-    next = { B1: v, B2: v, B3: v };
-  } else {
-    const src = body.offsets && typeof body.offsets === "object" ? body.offsets : body;
+  const nested = body.offsets && typeof body.offsets === "object" && !Array.isArray(body.offsets) ? body.offsets : null;
+  const hasBeaconKeyInBody = ["B1", "B2", "B3"].some((k) => Object.prototype.hasOwnProperty.call(body, k));
+  const usePerBeacon = nested !== null || hasBeaconKeyInBody;
+
+  if (usePerBeacon) {
+    const src = nested || body;
     for (const k of ["B1", "B2", "B3"]) {
-      if (src[k] === undefined || src[k] === null || String(src[k]).trim() === "") continue;
-      const n = Number(src[k]);
+      if (!Object.prototype.hasOwnProperty.call(src, k)) continue;
+      if (src[k] === undefined || src[k] === null) continue;
+      const trimmed = String(src[k]).trim();
+      if (trimmed === "") continue;
+      const n = Number(trimmed);
       if (!Number.isFinite(n)) {
         res.status(400).json({ error: `offset ${k} must be a number` });
         return;
       }
       next[k] = n;
     }
+  } else if (body.offset !== undefined && body.offset !== null && String(body.offset).trim() !== "") {
+    const v = Number(String(body.offset).trim());
+    if (!Number.isFinite(v)) {
+      res.status(400).json({ error: "offset must be a number" });
+      return;
+    }
+    next = { B1: v, B2: v, B3: v };
   }
 
   locatorState.offsets = normalizeBeaconOffsets(next);
