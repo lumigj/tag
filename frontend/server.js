@@ -4,6 +4,15 @@ import mqtt from "mqtt";
 import path from "path";
 import sqlite3 from "sqlite3";
 import { fileURLToPath } from "url";
+import {
+  defaultBeaconCoords,
+  estimateOffsetPosition,
+  filterSample,
+  layoutCenter,
+  newFilterStatesByMode,
+  offsetDistanceProxy,
+  sampleFromPayload,
+} from "./locatorCalibrated.mjs";
 
 const app = express();
 const PORT = Number(process.env.API_PORT || 4000);
@@ -21,15 +30,14 @@ const LOCATOR_TAG_ID = process.env.LOCATOR_TAG_ID || "tag-1";
 const LOCATOR_USERNAME = process.env.LOCATOR_USERNAME || "emqx";
 const LOCATOR_PASSWORD = process.env.LOCATOR_PASSWORD || "public";
 const LOCATOR_HISTORY = Number(process.env.LOCATOR_HISTORY || 20);
+const LOCATOR_RSSI_OFFSET = Number(process.env.LOCATOR_RSSI_OFFSET || 0);
 
 app.use(cors());
 app.use(express.json());
 
-const BEACON_COORDS = {
-  B1: [0.15, 0.14],
-  B2: [0.85, 0.14],
-  B3: [0.5, 0.7462],
-};
+const BEACON_COORDS = defaultBeaconCoords();
+const locatorFilterStatesByMode = newFilterStatesByMode();
+const initialLocatorCenter = layoutCenter(BEACON_COORDS, 3);
 
 const locatorState = {
   connected: false,
@@ -37,11 +45,13 @@ const locatorState = {
   mode: 2,
   gate: "WAIT",
   rssi: { B1: null, B2: null, B3: null },
-  current: { x: 0.5, y: 0.34, color: "#adb5bd" },
+  current: { x: initialLocatorCenter[0], y: initialLocatorCenter[1], color: "#adb5bd" },
   trail: [],
   calibration_rows: "-- --",
   timestamp: null,
   updated_at: null,
+  offset: Number.isFinite(LOCATOR_RSSI_OFFSET) ? LOCATOR_RSSI_OFFSET : 0,
+  sampleHistory: [],
 };
 
 const locatorSseClients = new Set();
@@ -58,37 +68,37 @@ function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
 }
 
-function rssiToScore(rssi) {
-  return clamp((Number(rssi) || -95) - (-95) + 1, 1, 56);
+function offsetPreviewExamples(offset) {
+  return {
+    rssi_neg21: Math.trunc(offsetDistanceProxy(-21, offset)),
+    rssi_neg50: Math.trunc(offsetDistanceProxy(-50, offset)),
+  };
 }
 
-function estimateRawPosition(sample) {
-  const mode = Number(sample.mode) === 3 ? 3 : 2;
-  const s1 = rssiToScore(sample.rssi1);
-  const s2 = rssiToScore(sample.rssi2);
-  if (mode === 2) {
-    const total = s1 + s2 || 1;
-    const ratio = s2 / total;
-    return {
-      x: Number((BEACON_COORDS.B1[0] + (BEACON_COORDS.B2[0] - BEACON_COORDS.B1[0]) * ratio).toFixed(4)),
-      y: Number((BEACON_COORDS.B1[1] + (BEACON_COORDS.B2[1] - BEACON_COORDS.B1[1]) * ratio).toFixed(4)),
-      gate: "RAW-B12",
-      color: "#457b9d",
-    };
-  }
-  const s3 = rssiToScore(sample.rssi3);
-  const total = s1 + s2 + s3 || 1;
-  const x = (
-    BEACON_COORDS.B1[0] * s1
-    + BEACON_COORDS.B2[0] * s2
-    + BEACON_COORDS.B3[0] * s3
-  ) / total;
-  const y = (
-    BEACON_COORDS.B1[1] * s1
-    + BEACON_COORDS.B2[1] * s2
-    + BEACON_COORDS.B3[1] * s3
-  ) / total;
-  return { x: Number(x.toFixed(4)), y: Number(y.toFixed(4)), gate: "RAW-B123", color: "#2a9d8f" };
+function recomputeLocatorFromHistory() {
+  const history = locatorState.sampleHistory;
+  if (!history.length) return;
+
+  const latest = history[history.length - 1];
+  locatorState.mode = latest.mode;
+  const currentMode = latest.mode;
+  const samplesInMode = history.filter((s) => s.mode === currentMode);
+  if (!samplesInMode.length) return;
+
+  const offset = locatorState.offset;
+  const estimates = samplesInMode.map((s) => estimateOffsetPosition(s, BEACON_COORDS, offset));
+  const last = estimates[estimates.length - 1];
+  const modeSample = samplesInMode[samplesInMode.length - 1];
+
+  locatorState.gate = last.gate;
+  locatorState.rssi = {
+    B1: modeSample.rssi1,
+    B2: modeSample.rssi2,
+    B3: modeSample.rssi3 === null || modeSample.rssi3 === undefined ? null : modeSample.rssi3,
+  };
+  locatorState.current = { x: last.x, y: last.y, color: last.color };
+  locatorState.timestamp = modeSample.timestamp ?? null;
+  locatorState.trail = estimates.slice(0, -1).map((e) => ({ x: e.x, y: e.y }));
 }
 
 function formatCalibrationRows(payload, mode) {
@@ -101,6 +111,7 @@ function formatCalibrationRows(payload, mode) {
 }
 
 function locatorSnapshot() {
+  const preview = offsetPreviewExamples(locatorState.offset);
   return {
     connected: locatorState.connected,
     tag_id: locatorState.tag_id,
@@ -113,12 +124,16 @@ function locatorSnapshot() {
     calibration_rows: locatorState.calibration_rows,
     timestamp: locatorState.timestamp,
     updated_at: locatorState.updated_at,
+    offset: locatorState.offset,
+    offset_preview: preview,
     status_text: [
       `tag mode = ${locatorState.mode === 3 ? "TRIANGLE" : "LINE"}`,
       `estimate = ${locatorState.gate}`,
       `rssi B1  = ${locatorState.rssi.B1 ?? "--"}`,
       `rssi B2  = ${locatorState.rssi.B2 ?? "--"}`,
       `rssi B3  = ${locatorState.rssi.B3 ?? "--"}`,
+      `offset   = ${locatorState.offset}`,
+      `proxy ex = -21->${preview.rssi_neg21}, -50->${preview.rssi_neg50}`,
       `cal rows = ${locatorState.calibration_rows}`,
     ].join("\n"),
   };
@@ -167,22 +182,19 @@ function startLocatorMqtt() {
       return;
     }
     if (topic === sampleTopic() && payload?.type === "tag_sample") {
-      const mode = Number(payload.mode) === 3 ? 3 : 2;
-      const estimate = estimateRawPosition(payload);
-      locatorState.mode = mode;
-      locatorState.gate = estimate.gate;
-      locatorState.rssi = {
-        B1: Number.isFinite(Number(payload.rssi1)) ? Number(payload.rssi1) : null,
-        B2: Number.isFinite(Number(payload.rssi2)) ? Number(payload.rssi2) : null,
-        B3: payload.rssi3 === null || payload.rssi3 === undefined ? null : Number(payload.rssi3),
-      };
-      locatorState.current = { x: estimate.x, y: estimate.y, color: estimate.color };
-      locatorState.timestamp = payload.timestamp || null;
-      locatorState.updated_at = Date.now();
-      locatorState.trail.push({ x: estimate.x, y: estimate.y });
-      if (locatorState.trail.length > LOCATOR_HISTORY) {
-        locatorState.trail = locatorState.trail.slice(-LOCATOR_HISTORY);
+      const rawSample = sampleFromPayload(payload);
+      if (!rawSample) return;
+
+      const filterStates = locatorFilterStatesByMode[rawSample.mode];
+      if (!filterStates) return;
+
+      const filtered = filterSample(rawSample, filterStates);
+      locatorState.sampleHistory.push(filtered);
+      if (locatorState.sampleHistory.length > LOCATOR_HISTORY) {
+        locatorState.sampleHistory.shift();
       }
+      recomputeLocatorFromHistory();
+      locatorState.updated_at = Date.now();
       pushLocatorEvent();
     }
   });
@@ -262,11 +274,25 @@ app.get("/api", (_req, res) => {
       "/api/processed/latest?limit=80",
       "/api/locator/latest",
       "/api/locator/stream",
+      "POST /api/locator/offset",
     ],
   });
 });
 
 app.get("/api/locator/latest", (_req, res) => {
+  res.json(locatorSnapshot());
+});
+
+app.post("/api/locator/offset", (req, res) => {
+  const next = Number(req.body?.offset);
+  if (!Number.isFinite(next)) {
+    res.status(400).json({ error: "offset must be a number" });
+    return;
+  }
+  locatorState.offset = next;
+  recomputeLocatorFromHistory();
+  locatorState.updated_at = Date.now();
+  pushLocatorEvent();
   res.json(locatorSnapshot());
 });
 

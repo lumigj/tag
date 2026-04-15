@@ -342,6 +342,48 @@ body {
     white-space: pre-wrap;
     font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
   }
+
+  .locator-offset-hint {
+    margin-top: 4px;
+    color: #64748b;
+    font-size: 12px;
+  }
+
+  .locator-offset-hint code {
+    font-size: 11px;
+  }
+
+  .locator-offset-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
+    margin: 10px 0 0 0;
+  }
+
+  .locator-offset-label {
+    font-size: 13px;
+    font-weight: 600;
+    color: #334155;
+  }
+
+  .locator-offset-input {
+    width: 120px;
+    padding: 8px 10px;
+    border: 1px solid #cbd5e1;
+    border-radius: 8px;
+    font-size: 14px;
+  }
+
+  .locator-offset-apply {
+    background: #0f766e;
+  }
+
+  .locator-offset-preview {
+    font-size: 12px;
+    color: #475569;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  }
   
   .button-group {
     display: flex;
