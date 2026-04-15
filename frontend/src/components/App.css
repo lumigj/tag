@@ -342,6 +342,39 @@ body {
     white-space: pre-wrap;
     font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
   }
+
+  .find-tools {
+    align-items: flex-start;
+    width: 100%;
+  }
+
+  .find-tools-column {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-width: 200px;
+  }
+
+  button.ring-device-button {
+    background: #0f766e;
+    font-weight: 600;
+  }
+
+  button.ring-device-button:hover:not(:disabled) {
+    opacity: 0.92;
+  }
+
+  button.ring-device-button:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+  }
+
+  .ring-device-status {
+    margin: 0;
+    font-size: 13px;
+    color: #334155;
+    max-width: 280px;
+  }
   
   .button-group {
     display: flex;

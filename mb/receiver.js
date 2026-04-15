@@ -9,5 +9,12 @@ radio.onReceivedString(function (receivedString) {
     led.toggle(4, 0)
     serial.writeLine(receivedString)
 })
+serial.onDataReceived(serial.delimiters(Delimiters.NewLine), function () {
+    let line = serial.readLine()
+    line = line.trim()
+    if (line == "CMD:RING") {
+        radio.sendString("CMD:RING")
+    }
+})
 radio.setGroup(23)
 radio.setFrequencyBand(11)

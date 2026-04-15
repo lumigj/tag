@@ -5,6 +5,22 @@ radio.onReceivedNumber(function (receivedNumber) {
     }
     updateBeaconRssi(receivedNumber, radio.receivedPacket(RadioPacketProperty.SignalStrength))
 })
+radio.onReceivedString(function (receivedString) {
+    if (receivedString == "CMD:RING") {
+        startRingAlert()
+    }
+})
+function startRingAlert() {
+    control.inBackground(function () {
+        let endTime = input.runningTime() + 2800
+        while (input.runningTime() < endTime) {
+            music.playTone(880, 100)
+            basic.pause(110)
+            music.playTone(660, 100)
+            basic.pause(110)
+        }
+    })
+}
 function updateBeaconRssi(beaconId: number, rssi: number) {
     if (beaconId == 1) {
         rawRssi1 = rssi

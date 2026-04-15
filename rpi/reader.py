@@ -4,6 +4,7 @@ import argparse
 import fcntl
 import json
 import os
+import queue
 import random
 import sqlite3
 import sys
@@ -29,6 +30,8 @@ BROKER_PORT = 1883
 TOPIC_PREFIX = "/is4151-is5451/tag-locator/v1"
 USERNAME = "emqx"
 PASSWORD = "public"
+
+RING_SERIAL_LINE = "CMD:RING"
 
 
 def on_connect(client, userdata, flags, reason_code, properties=None):
@@ -69,6 +72,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 def build_sample_topic(topic_prefix: str, tag_id: str) -> str:
     return "{}/{}/sample".format(topic_prefix.rstrip("/"), tag_id)
+
+
+def build_cmd_topic(topic_prefix: str, tag_id: str) -> str:
+    return "{}/{}/cmd".format(topic_prefix.rstrip("/"), tag_id)
 
 
 def acquire_port_lock(port: str):
@@ -210,6 +217,64 @@ class MotionRecorder:
             self.conn.close()
 
 
+def flush_ring_commands_to_serial(serial_conn: Serial, ring_queue: queue.Queue) -> None:
+    while True:
+        try:
+            ring_queue.get_nowait()
+        except queue.Empty:
+            break
+        try:
+            serial_conn.write((RING_SERIAL_LINE + "\n").encode("utf-8"))
+            serial_conn.flush()
+            print("Wrote {} to receiver serial".format(RING_SERIAL_LINE))
+        except Exception as err:
+            print("Failed to write ring command to serial: {}".format(err))
+
+
+class RingCommandSubscriber:
+    """Subscribes to MQTT .../cmd and queues ring requests for the main serial loop."""
+
+    def __init__(self, broker: str, broker_port: int, topic_prefix: str, tag_id: str, ring_queue: queue.Queue):
+        try:
+            import paho.mqtt.client as mqtt
+        except ModuleNotFoundError as err:
+            raise RuntimeError("paho-mqtt is required for ring command subscription.") from err
+
+        self.ring_queue = ring_queue
+        self.cmd_topic = build_cmd_topic(topic_prefix, tag_id)
+        self.tag_id = tag_id
+
+        def on_connect(client, userdata, flags, reason_code, properties=None):
+            if reason_code == 0:
+                client.subscribe(self.cmd_topic)
+                print("Ring command MQTT subscribed: {}".format(self.cmd_topic))
+            else:
+                print("Ring MQTT connect failed, code {}".format(reason_code))
+
+        def on_message(client, userdata, msg):
+            try:
+                payload = json.loads(msg.payload.decode("utf-8"))
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                return
+            if payload.get("tag_id") != self.tag_id:
+                return
+            if payload.get("type") == "ring":
+                self.ring_queue.put("ring")
+
+        client_id = "tag-ring-sub-{}".format(random.randint(0, 9999))
+        self.client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=client_id)
+        self.client.username_pw_set(USERNAME, PASSWORD)
+        self.client.on_connect = on_connect
+        self.client.on_message = on_message
+        self.client.connect(broker, broker_port)
+        self.client.loop_start()
+
+    def close(self):
+        self.client.loop_stop()
+        self.client.disconnect()
+        time.sleep(0.1)
+
+
 class LocatorPublisher:
     def __init__(self, broker: str, broker_port: int, topic_prefix: str, tag_id: str):
         try:
@@ -270,6 +335,8 @@ def run() -> int:
     port_lock = None
     motion_recorder = None
     locator_publisher = None
+    ring_subscriber = None
+    ring_queue: queue.Queue = queue.Queue()
 
     try:
         motion_recorder = MotionRecorder(
@@ -283,6 +350,14 @@ def run() -> int:
             topic_prefix=args.topic_prefix,
             tag_id=args.tag_id,
         )
+        if not args.stdin:
+            ring_subscriber = RingCommandSubscriber(
+                broker=args.broker,
+                broker_port=args.broker_port,
+                topic_prefix=args.topic_prefix,
+                tag_id=args.tag_id,
+                ring_queue=ring_queue,
+            )
 
         if args.stdin:
             print("Reading raw lines from stdin... Press CTRL+D to stop.")
@@ -299,6 +374,7 @@ def run() -> int:
                     break
                 line = raw_line.strip()
             else:
+                flush_ring_commands_to_serial(serial_conn, ring_queue)
                 raw = serial_conn.readline()
                 if not raw:
                     continue
@@ -339,6 +415,8 @@ def run() -> int:
             port_lock.close()
         if motion_recorder is not None:
             motion_recorder.close()
+        if ring_subscriber is not None:
+            ring_subscriber.close()
         if locator_publisher is not None:
             locator_publisher.close()
 

@@ -46,12 +46,22 @@ const locatorState = {
 
 const locatorSseClients = new Set();
 
+/** @type {import("mqtt").MqttClient | null} */
+let locatorMqttClient = null;
+
+let lastRingPublishAt = 0;
+const RING_COOLDOWN_MS = 2500;
+
 function sampleTopic() {
   return `${LOCATOR_TOPIC_PREFIX.replace(/\/$/, "")}/${LOCATOR_TAG_ID}/sample`;
 }
 
 function calibrationTopic() {
   return `${LOCATOR_TOPIC_PREFIX.replace(/\/$/, "")}/${LOCATOR_TAG_ID}/calibration`;
+}
+
+function cmdTopic() {
+  return `${LOCATOR_TOPIC_PREFIX.replace(/\/$/, "")}/${LOCATOR_TAG_ID}/cmd`;
 }
 
 function clamp(value, min, max) {
@@ -140,14 +150,18 @@ function startLocatorMqtt() {
   });
 
   client.on("connect", () => {
+    locatorMqttClient = client;
     locatorState.connected = true;
     client.subscribe(sampleTopic());
     client.subscribe(calibrationTopic());
     pushLocatorEvent();
-    console.log(`Locator MQTT connected. sample=${sampleTopic()} calibration=${calibrationTopic()}`);
+    console.log(
+      `Locator MQTT connected. sample=${sampleTopic()} calibration=${calibrationTopic()} ring publishes -> ${cmdTopic()}`
+    );
   });
 
   client.on("close", () => {
+    locatorMqttClient = null;
     locatorState.connected = false;
     pushLocatorEvent();
   });
@@ -262,7 +276,33 @@ app.get("/api", (_req, res) => {
       "/api/processed/latest?limit=80",
       "/api/locator/latest",
       "/api/locator/stream",
+      "POST /api/ring",
     ],
+  });
+});
+
+app.post("/api/ring", (req, res) => {
+  if (!locatorMqttClient || !locatorMqttClient.connected) {
+    res.status(503).json({ ok: false, error: "MQTT client not connected yet" });
+    return;
+  }
+  const now = Date.now();
+  if (now - lastRingPublishAt < RING_COOLDOWN_MS) {
+    res.status(429).json({ ok: false, error: "Ring cooldown active; try again shortly" });
+    return;
+  }
+  const payload = JSON.stringify({
+    type: "ring",
+    tag_id: LOCATOR_TAG_ID,
+  });
+  locatorMqttClient.publish(cmdTopic(), payload, { qos: 0 }, (err) => {
+    if (err) {
+      res.status(500).json({ ok: false, error: String(err?.message || err) });
+      return;
+    }
+    lastRingPublishAt = Date.now();
+    console.log(`Published ring command to ${cmdTopic()}`);
+    res.json({ ok: true });
   });
 });
 
@@ -387,4 +427,5 @@ app.listen(PORT, () => {
   console.log(`Raw source: ${RAW_SOURCE_VIEW}`);
   console.log(`Processed source: ${PROCESSED_SOURCE_VIEW}`);
   console.log(`Locator source: mqtt://${LOCATOR_BROKER}:${LOCATOR_BROKER_PORT} (${LOCATOR_TAG_ID})`);
+  console.log(`Ring command publishes to: ${cmdTopic()}`);
 });
