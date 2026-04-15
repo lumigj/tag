@@ -136,30 +136,38 @@ function App() {
       </div>
 
       {activeModeCard === "FIND" ? (
-        <div className="bottom-row find-tools">
-          <div className="find-tools-column">
-            <button
-              type="button"
-              className="ring-device-button"
-              disabled={ringBusy}
-              onClick={async () => {
-                setRingBusy(true);
-                setRingStatus("");
-                try {
-                  await postRingDevice();
-                  setRingStatus("Ring command sent.");
-                } catch (err) {
-                  setRingStatus(String(err?.message || err));
-                } finally {
-                  setRingBusy(false);
-                }
-              }}
-            >
-              Ring my device
-            </button>
-            {ringStatus ? <p className="ring-device-status">{ringStatus}</p> : null}
+        <div className="bottom-row find-mode-row">
+          <div className="find-mode-stack">
+            <LocatorLiveMap />
+            <div className="card ring-device-card">
+              <h2>Ring my device!</h2>
+              <p className="timeline-note">
+                Sends <code>CMD:RING</code> through the hub so your tag can play an alert tone.
+              </p>
+              <div className="ring-device-actions">
+                <button
+                  type="button"
+                  className="ring-device-button"
+                  disabled={ringBusy}
+                  onClick={async () => {
+                    setRingBusy(true);
+                    setRingStatus("");
+                    try {
+                      await postRingDevice();
+                      setRingStatus("Ring command sent.");
+                    } catch (err) {
+                      setRingStatus(String(err?.message || err));
+                    } finally {
+                      setRingBusy(false);
+                    }
+                  }}
+                >
+                  Ring my device
+                </button>
+                {ringStatus ? <p className="ring-device-status">{ringStatus}</p> : null}
+              </div>
+            </div>
           </div>
-          <LocatorLiveMap />
         </div>
       ) : null}
 
