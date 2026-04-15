@@ -344,18 +344,18 @@ body {
   }
 
   .find-mode-row {
-    width: 100%;
-    flex: 1 1 100%;
-  }
+  width: 100%;
+  flex: 1 1 100%;
+}
 
   .find-mode-stack {
-    display: flex;
-    flex-direction: column;
-    gap: 20px;
-    width: 100%;
-    flex: 1 1 100%;
-    min-width: 0;
-  }
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  width: 100%;
+  flex: 1 1 100%;
+  min-width: 0;
+}
 
   .find-mode-stack > .card {
     width: 100%;

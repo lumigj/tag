@@ -121,20 +121,6 @@ function App() {
         <PredictionBreakdownChart rows={processedRows} />
       </div>
 
-      <div className="bottom-row">
-        <RawStrengthChart data={rawRows} />
-      </div>
-
-      {/* Strength timeline (raw strength + processed markers) — disabled
-      <div className="bottom-row">
-        <LabeledStrengthTimeline rawRows={rawRows} processedRows={processedRows} />
-      </div>
-      */}
-
-      <div className="bottom-row">
-        <ProcessedMeanTimeline processedRows={processedRows} />
-      </div>
-
       {activeModeCard === "FIND" ? (
         <div className="bottom-row find-mode-row">
           <div className="find-mode-stack">
@@ -170,6 +156,20 @@ function App() {
           </div>
         </div>
       ) : null}
+
+      <div className="bottom-row">
+        <RawStrengthChart data={rawRows} />
+      </div>
+
+      {/* Strength timeline (raw strength + processed markers) — disabled
+      <div className="bottom-row">
+        <LabeledStrengthTimeline rawRows={rawRows} processedRows={processedRows} />
+      </div>
+      */}
+
+      <div className="bottom-row">
+        <ProcessedMeanTimeline processedRows={processedRows} />
+      </div>
 
       <div className="bottom-row">
         <EventLogTable events={processedRows.slice(0, EVENT_LOG_ROWS)} />
