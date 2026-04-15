@@ -10,6 +10,7 @@ import {
   filterSample,
   layoutCenter,
   newFilterStatesByMode,
+  normalizeBeaconOffsets,
   offsetDistanceProxy,
   sampleFromPayload,
 } from "./locatorCalibrated.mjs";
@@ -30,7 +31,21 @@ const LOCATOR_TAG_ID = process.env.LOCATOR_TAG_ID || "tag-1";
 const LOCATOR_USERNAME = process.env.LOCATOR_USERNAME || "emqx";
 const LOCATOR_PASSWORD = process.env.LOCATOR_PASSWORD || "public";
 const LOCATOR_HISTORY = Number(process.env.LOCATOR_HISTORY || 20);
-const LOCATOR_RSSI_OFFSET = Number(process.env.LOCATOR_RSSI_OFFSET || 0);
+const rawDefLocatorOffset = Number(process.env.LOCATOR_RSSI_OFFSET || 0);
+const DEF_LOCATOR_RSSI_OFFSET = Number.isFinite(rawDefLocatorOffset) ? rawDefLocatorOffset : 0;
+
+function envBeaconOffsetVar(name) {
+  const v = process.env[name];
+  if (v === undefined || v === "") return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+const initialLocatorOffsets = normalizeBeaconOffsets({
+  B1: envBeaconOffsetVar("LOCATOR_RSSI_OFFSET_B1") ?? DEF_LOCATOR_RSSI_OFFSET,
+  B2: envBeaconOffsetVar("LOCATOR_RSSI_OFFSET_B2") ?? DEF_LOCATOR_RSSI_OFFSET,
+  B3: envBeaconOffsetVar("LOCATOR_RSSI_OFFSET_B3") ?? DEF_LOCATOR_RSSI_OFFSET,
+});
 
 app.use(cors());
 app.use(express.json());
@@ -45,12 +60,17 @@ const locatorState = {
   mode: 2,
   gate: "WAIT",
   rssi: { B1: null, B2: null, B3: null },
-  current: { x: initialLocatorCenter[0], y: initialLocatorCenter[1], color: "#adb5bd" },
+  current: {
+    x: initialLocatorCenter[0],
+    y: initialLocatorCenter[1],
+    color: "#adb5bd",
+    inside_triangle: true,
+  },
   trail: [],
   calibration_rows: "-- --",
   timestamp: null,
   updated_at: null,
-  offset: Number.isFinite(LOCATOR_RSSI_OFFSET) ? LOCATOR_RSSI_OFFSET : 0,
+  offsets: initialLocatorOffsets,
   sampleHistory: [],
 };
 
@@ -78,11 +98,13 @@ function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
 }
 
-function offsetPreviewExamples(offset) {
-  return {
-    rssi_neg21: Math.trunc(offsetDistanceProxy(-21, offset)),
-    rssi_neg50: Math.trunc(offsetDistanceProxy(-50, offset)),
-  };
+function offsetPreviewExamples(offsets) {
+  const o = normalizeBeaconOffsets(offsets);
+  const row = (off) => ({
+    rssi_neg21: Math.trunc(offsetDistanceProxy(-21, off)),
+    rssi_neg50: Math.trunc(offsetDistanceProxy(-50, off)),
+  });
+  return { B1: row(o.B1), B2: row(o.B2), B3: row(o.B3) };
 }
 
 function recomputeLocatorFromHistory() {
@@ -95,8 +117,7 @@ function recomputeLocatorFromHistory() {
   const samplesInMode = history.filter((s) => s.mode === currentMode);
   if (!samplesInMode.length) return;
 
-  const offset = locatorState.offset;
-  const estimates = samplesInMode.map((s) => estimateOffsetPosition(s, BEACON_COORDS, offset));
+  const estimates = samplesInMode.map((s) => estimateOffsetPosition(s, BEACON_COORDS, locatorState.offsets));
   const last = estimates[estimates.length - 1];
   const modeSample = samplesInMode[samplesInMode.length - 1];
 
@@ -106,9 +127,19 @@ function recomputeLocatorFromHistory() {
     B2: modeSample.rssi2,
     B3: modeSample.rssi3 === null || modeSample.rssi3 === undefined ? null : modeSample.rssi3,
   };
-  locatorState.current = { x: last.x, y: last.y, color: last.color };
+  const insideTri = last.insideTriangle !== false;
+  locatorState.current = {
+    x: last.x,
+    y: last.y,
+    color: last.color,
+    inside_triangle: insideTri,
+  };
   locatorState.timestamp = modeSample.timestamp ?? null;
-  locatorState.trail = estimates.slice(0, -1).map((e) => ({ x: e.x, y: e.y }));
+  locatorState.trail = estimates.slice(0, -1).map((e) => ({
+    x: e.x,
+    y: e.y,
+    outside: e.insideTriangle === false,
+  }));
 }
 
 function formatCalibrationRows(payload, mode) {
@@ -121,7 +152,8 @@ function formatCalibrationRows(payload, mode) {
 }
 
 function locatorSnapshot() {
-  const preview = offsetPreviewExamples(locatorState.offset);
+  const preview = offsetPreviewExamples(locatorState.offsets);
+  const off = locatorState.offsets;
   return {
     connected: locatorState.connected,
     tag_id: locatorState.tag_id,
@@ -134,16 +166,23 @@ function locatorSnapshot() {
     calibration_rows: locatorState.calibration_rows,
     timestamp: locatorState.timestamp,
     updated_at: locatorState.updated_at,
-    offset: locatorState.offset,
+    offsets: { ...off },
     offset_preview: preview,
     status_text: [
       `tag mode = ${locatorState.mode === 3 ? "TRIANGLE" : "LINE"}`,
       `estimate = ${locatorState.gate}`,
+      ...(locatorState.mode === 3
+        ? [
+            `region   = ${
+              locatorState.current?.inside_triangle === false ? "OUTSIDE hull" : "inside hull"
+            }`,
+          ]
+        : []),
       `rssi B1  = ${locatorState.rssi.B1 ?? "--"}`,
       `rssi B2  = ${locatorState.rssi.B2 ?? "--"}`,
       `rssi B3  = ${locatorState.rssi.B3 ?? "--"}`,
-      `offset   = ${locatorState.offset}`,
-      `proxy ex = -21->${preview.rssi_neg21}, -50->${preview.rssi_neg50}`,
+      `offsets  = B1=${off.B1} B2=${off.B2} B3=${off.B3}`,
+      `proxy ex = B1:-21->${preview.B1.rssi_neg21} -50->${preview.B1.rssi_neg50} | B2:-21->${preview.B2.rssi_neg21} -50->${preview.B2.rssi_neg50} | B3:-21->${preview.B3.rssi_neg21} -50->${preview.B3.rssi_neg50}`,
       `cal rows = ${locatorState.calibration_rows}`,
     ].join("\n"),
   };
@@ -324,12 +363,30 @@ app.get("/api/locator/latest", (_req, res) => {
 });
 
 app.post("/api/locator/offset", (req, res) => {
-  const next = Number(req.body?.offset);
-  if (!Number.isFinite(next)) {
-    res.status(400).json({ error: "offset must be a number" });
-    return;
+  const body = req.body && typeof req.body === "object" ? req.body : {};
+  let next = { ...locatorState.offsets };
+
+  if (body.offset !== undefined && body.offset !== null && String(body.offset).trim() !== "") {
+    const v = Number(body.offset);
+    if (!Number.isFinite(v)) {
+      res.status(400).json({ error: "offset must be a number" });
+      return;
+    }
+    next = { B1: v, B2: v, B3: v };
+  } else {
+    const src = body.offsets && typeof body.offsets === "object" ? body.offsets : body;
+    for (const k of ["B1", "B2", "B3"]) {
+      if (src[k] === undefined || src[k] === null || String(src[k]).trim() === "") continue;
+      const n = Number(src[k]);
+      if (!Number.isFinite(n)) {
+        res.status(400).json({ error: `offset ${k} must be a number` });
+        return;
+      }
+      next[k] = n;
+    }
   }
-  locatorState.offset = next;
+
+  locatorState.offsets = normalizeBeaconOffsets(next);
   recomputeLocatorFromHistory();
   locatorState.updated_at = Date.now();
   pushLocatorEvent();

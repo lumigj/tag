@@ -1,12 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { getLocatorLatest, postLocatorOffset } from "../api/client";
+import { getLocatorLatest, postLocatorOffsets } from "../api/client";
 
 const LOCATOR_UI_THROTTLE_MS = 5000;
 
 function LocatorLiveMap() {
   const [locator, setLocator] = useState(null);
   const [streamError, setStreamError] = useState("");
-  const [offsetInput, setOffsetInput] = useState("0");
+  const [offsetB1, setOffsetB1] = useState("0");
+  const [offsetB2, setOffsetB2] = useState("0");
+  const [offsetB3, setOffsetB3] = useState("0");
   const [offsetError, setOffsetError] = useState("");
   const latestLocatorRef = useRef(null);
 
@@ -20,8 +22,10 @@ function LocatorLiveMap() {
         if (active) {
           setLocator(snapshot);
           latestLocatorRef.current = snapshot;
-          if (snapshot.offset !== undefined && snapshot.offset !== null) {
-            setOffsetInput(String(snapshot.offset));
+          if (snapshot.offsets) {
+            setOffsetB1(String(snapshot.offsets.B1));
+            setOffsetB2(String(snapshot.offsets.B2));
+            setOffsetB3(String(snapshot.offsets.B3));
           }
         }
       } catch (error) {
@@ -65,7 +69,8 @@ function LocatorLiveMap() {
     B3: [0.5, 0.746218],
   };
   const mode = locator?.mode === 3 ? 3 : 2;
-  const current = locator?.current || { x: 0.5, y: 0.34, color: "#adb5bd" };
+  const current = locator?.current || { x: 0.5, y: 0.34, color: "#adb5bd", inside_triangle: true };
+  const outsideHull = locator?.mode === 3 && current?.inside_triangle === false;
   const trail = locator?.trail || [];
 
   const toSvg = useMemo(() => {
@@ -83,18 +88,28 @@ function LocatorLiveMap() {
   const statusText = locator?.status_text || "Waiting for MQTT locator data...";
   const preview = locator?.offset_preview;
 
-  async function applyOffset() {
+  function syncOffsetsFromSnapshot(snapshot) {
+    if (snapshot?.offsets) {
+      setOffsetB1(String(snapshot.offsets.B1));
+      setOffsetB2(String(snapshot.offsets.B2));
+      setOffsetB3(String(snapshot.offsets.B3));
+    }
+  }
+
+  async function applyOffsets() {
     setOffsetError("");
     try {
-      const next = Number(offsetInput.trim());
-      if (!Number.isFinite(next)) {
-        setOffsetError("Offset must be a number.");
+      const b1 = Number(offsetB1.trim());
+      const b2 = Number(offsetB2.trim());
+      const b3 = Number(offsetB3.trim());
+      if (!Number.isFinite(b1) || !Number.isFinite(b2) || !Number.isFinite(b3)) {
+        setOffsetError("Each beacon offset must be a number.");
         return;
       }
-      const snapshot = await postLocatorOffset(next);
+      const snapshot = await postLocatorOffsets({ B1: b1, B2: b2, B3: b3 });
       latestLocatorRef.current = snapshot;
       setLocator(snapshot);
-      setOffsetInput(String(snapshot.offset));
+      syncOffsetsFromSnapshot(snapshot);
     } catch (err) {
       setOffsetError(String(err?.message || err));
     }
@@ -107,28 +122,72 @@ function LocatorLiveMap() {
         {locator?.connected ? "MQTT connected" : "MQTT disconnected"} | tag: {locator?.tag_id || "tag-1"}
       </p>
       <p className="timeline-note locator-offset-hint">
-        Distance proxy = max(abs(rssi) - offset, 0). Same solve as <code>pc/subscriber_calibrated.py</code>.
+        Per-beacon distance proxy = max(abs(rssi) - offset for that beacon, 0). Triangle mode minimizes the same
+        ratio/order mismatch as <code>locator_core.triangle_candidate_error</code> over the plane; orange = outside hull.
       </p>
-      <div className="locator-offset-row">
-        <label className="locator-offset-label" htmlFor="locator-offset-input">
-          Offset
-        </label>
-        <input
-          id="locator-offset-input"
-          type="text"
-          inputMode="decimal"
-          className="locator-offset-input"
-          value={offsetInput}
-          onChange={(e) => setOffsetInput(e.target.value)}
-        />
-        <button type="button" className="locator-offset-apply" onClick={() => void applyOffset()}>
-          Apply offset
+      {outsideHull ? (
+        <p className="locator-outside-banner" role="status">
+          Estimate is outside the beacon triangle (relaxed solve).
+        </p>
+      ) : null}
+      <div className="locator-offset-beacons">
+        <div className="locator-offset-beacon-field">
+          <label className="locator-offset-label" htmlFor="locator-offset-b1">
+            B1 offset
+          </label>
+          <input
+            id="locator-offset-b1"
+            type="text"
+            inputMode="decimal"
+            className="locator-offset-input locator-offset-input-narrow"
+            value={offsetB1}
+            onChange={(e) => setOffsetB1(e.target.value)}
+          />
+          {preview?.B1 ? (
+            <span className="locator-offset-preview">
+              -21 → {preview.B1.rssi_neg21}, -50 → {preview.B1.rssi_neg50}
+            </span>
+          ) : null}
+        </div>
+        <div className="locator-offset-beacon-field">
+          <label className="locator-offset-label" htmlFor="locator-offset-b2">
+            B2 offset
+          </label>
+          <input
+            id="locator-offset-b2"
+            type="text"
+            inputMode="decimal"
+            className="locator-offset-input locator-offset-input-narrow"
+            value={offsetB2}
+            onChange={(e) => setOffsetB2(e.target.value)}
+          />
+          {preview?.B2 ? (
+            <span className="locator-offset-preview">
+              -21 → {preview.B2.rssi_neg21}, -50 → {preview.B2.rssi_neg50}
+            </span>
+          ) : null}
+        </div>
+        <div className="locator-offset-beacon-field">
+          <label className="locator-offset-label" htmlFor="locator-offset-b3">
+            B3 offset
+          </label>
+          <input
+            id="locator-offset-b3"
+            type="text"
+            inputMode="decimal"
+            className="locator-offset-input locator-offset-input-narrow"
+            value={offsetB3}
+            onChange={(e) => setOffsetB3(e.target.value)}
+          />
+          {preview?.B3 ? (
+            <span className="locator-offset-preview">
+              -21 → {preview.B3.rssi_neg21}, -50 → {preview.B3.rssi_neg50}
+            </span>
+          ) : null}
+        </div>
+        <button type="button" className="locator-offset-apply" onClick={() => void applyOffsets()}>
+          Apply offsets
         </button>
-        {preview ? (
-          <span className="locator-offset-preview">
-            -21 → {preview.rssi_neg21}, -50 → {preview.rssi_neg50}
-          </span>
-        ) : null}
       </div>
       {offsetError ? <p className="error-banner">{offsetError}</p> : null}
       {streamError ? <p className="error-banner">{streamError}</p> : null}
@@ -191,13 +250,13 @@ function LocatorLiveMap() {
           );
         })}
 
-        {trail.slice(0, -1).map((p, idx) => (
+        {trail.map((p, idx) => (
           <circle
             key={`${idx}-${p.x}-${p.y}`}
             cx={toSvg.mapX(p.x)}
             cy={toSvg.mapY(p.y)}
             r={4 + Math.floor((idx / Math.max(1, trail.length - 1)) * 4)}
-            fill="#94a3b8"
+            fill={p.outside ? "#fdba74" : "#94a3b8"}
             opacity="0.35"
           />
         ))}

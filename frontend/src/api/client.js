@@ -40,15 +40,21 @@ export async function postRingDevice() {
   }
   return body;
 }
-export async function postLocatorOffset(offset) {
+/** Set per-beacon offsets `{ B1, B2, B3 }`, or `{ offset }` to use one value for all beacons. */
+export async function postLocatorOffsets(payload) {
   const response = await fetch("/api/locator/offset", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ offset }),
+    body: JSON.stringify(payload),
   });
   if (!response.ok) {
     const errBody = await response.json().catch(() => ({}));
     throw new Error(errBody.error || `Request failed (${response.status}) for /api/locator/offset`);
   }
   return response.json();
+}
+
+/** Same value for B1, B2, and B3. */
+export async function postLocatorOffset(offset) {
+  return postLocatorOffsets({ offset });
 }

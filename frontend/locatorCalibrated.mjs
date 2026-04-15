@@ -1,6 +1,7 @@
 /**
  * Mirrors tag/pc/subscriber_calibrated.py + tag/pc/locator_core.py
- * (offset distance proxy, median RSSI filter, proportional triangle solve).
+ * (offset distance proxy, median RSSI filter).
+ * Triangle mode: unconstrained plane solve so the dot can sit outside the B1–B2–B3 hull.
  */
 
 const FILTER_WINDOW = 5;
@@ -44,6 +45,29 @@ export function offsetDistanceProxy(rssi, offset) {
   const proxy = Math.abs(Number(rssi)) - Number(offset);
   if (proxy < 0) return 0;
   return proxy;
+}
+
+/**
+ * Per-beacon offsets in max(abs(rssi) - offset_B?, 0). A single finite number applies to B1, B2, and B3.
+ * @param {number | { B1?: unknown, B2?: unknown, B3?: unknown } | null | undefined} input
+ * @returns {{ B1: number, B2: number, B3: number }}
+ */
+export function normalizeBeaconOffsets(input) {
+  if (typeof input === "number" && Number.isFinite(input)) {
+    return { B1: input, B2: input, B3: input };
+  }
+  const d = (v) => {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : 0;
+  };
+  if (input && typeof input === "object") {
+    return {
+      B1: d(input.B1),
+      B2: d(input.B2),
+      B3: d(input.B3),
+    };
+  }
+  return { B1: 0, B2: 0, B3: 0 };
 }
 
 function median(nums) {
@@ -121,6 +145,106 @@ export function proportionalTrianglePosition(beaconCoords, distances) {
   }
 
   return [round4(bestPoint[0]), round4(bestPoint[1])];
+}
+
+const BARY_EPS = 1e-6;
+
+/** True if (px, py) lies inside or on the edge of triangle B1–B2–B3 (same beacon order as layout). */
+export function pointInClosedTriangle(px, py, beaconCoords) {
+  const [ax, ay] = beaconCoords.B1;
+  const [bx, by] = beaconCoords.B2;
+  const [cx, cy] = beaconCoords.B3;
+  const v0x = cx - ax;
+  const v0y = cy - ay;
+  const v1x = bx - ax;
+  const v1y = by - ay;
+  const v2x = px - ax;
+  const v2y = py - ay;
+  const dot00 = v0x * v0x + v0y * v0y;
+  const dot01 = v0x * v1x + v0y * v1y;
+  const dot11 = v1x * v1x + v1y * v1y;
+  const dot20 = v2x * v0x + v2y * v0y;
+  const dot21 = v2x * v1x + v2y * v1y;
+  const denom = dot00 * dot11 - dot01 * dot01;
+  if (Math.abs(denom) < 1e-14) return false;
+  const inv = 1 / denom;
+  const u = (dot11 * dot20 - dot01 * dot21) * inv;
+  const v = (dot00 * dot21 - dot01 * dot20) * inv;
+  return u >= -BARY_EPS && v >= -BARY_EPS && u + v <= 1 + BARY_EPS;
+}
+
+function refineUnconstrainedPlane(x0, y0, beaconCoords, proxyDistances) {
+  let x = x0;
+  let y = y0;
+  let bestScore = triangleCandidateError(x, y, beaconCoords, proxyDistances);
+  const dirs = [
+    [1, 0],
+    [-1, 0],
+    [0, 1],
+    [0, -1],
+    [1, 1],
+    [1, -1],
+    [-1, 1],
+    [-1, -1],
+  ];
+  let step = 0.045;
+  for (let iter = 0; iter < 48; iter += 1) {
+    let improved = false;
+    for (const [dx, dy] of dirs) {
+      const nx = x + dx * step;
+      const ny = y + dy * step;
+      const s = triangleCandidateError(nx, ny, beaconCoords, proxyDistances);
+      if (scoreTupleLess(s, bestScore)) {
+        bestScore = s;
+        x = nx;
+        y = ny;
+        improved = true;
+      }
+    }
+    if (!improved) step *= 0.55;
+    if (step < 1e-5) break;
+  }
+  return [round4(x), round4(y)];
+}
+
+/**
+ * Minimize the same (order_penalty, ratio_error) score as the constrained solver, but over an
+ * extended region of the plane so the best point may lie outside the beacon triangle.
+ */
+export function unconstrainedTrianglePosition(beaconCoords, proxyDistances) {
+  const sumProxy = BEACON_ORDER.reduce((s, label) => s + proxyDistances[label], 0);
+  if (sumProxy <= 1e-9) {
+    const c = layoutCenter(beaconCoords, 3);
+    return { x: c[0], y: c[1], insideTriangle: true };
+  }
+
+  const xs = BEACON_ORDER.map((label) => beaconCoords[label][0]);
+  const ys = BEACON_ORDER.map((label) => beaconCoords[label][1]);
+  const pad = 0.38;
+  const minX = Math.min(...xs) - pad;
+  const maxX = Math.max(...xs) + pad;
+  const minY = Math.min(...ys) - pad;
+  const maxY = Math.max(...ys) + pad;
+  const step = 0.028;
+
+  let bestX = (minX + maxX) / 2;
+  let bestY = (minY + maxY) / 2;
+  let bestScore = triangleCandidateError(bestX, bestY, beaconCoords, proxyDistances);
+
+  for (let gx = minX; gx <= maxX; gx += step) {
+    for (let gy = minY; gy <= maxY; gy += step) {
+      const s = triangleCandidateError(gx, gy, beaconCoords, proxyDistances);
+      if (scoreTupleLess(s, bestScore)) {
+        bestScore = s;
+        bestX = gx;
+        bestY = gy;
+      }
+    }
+  }
+
+  const [rx, ry] = refineUnconstrainedPlane(bestX, bestY, beaconCoords, proxyDistances);
+  const insideTriangle = pointInClosedTriangle(rx, ry, beaconCoords);
+  return { x: rx, y: ry, insideTriangle };
 }
 
 export function newFilterState() {
@@ -221,28 +345,31 @@ export function sampleFromPayload(payload) {
   };
 }
 
-export function estimateOffsetPosition(sample, beaconCoords, offset) {
+export function estimateOffsetPosition(sample, beaconCoords, offsetsInput) {
+  const o = normalizeBeaconOffsets(offsetsInput);
   if (sample.mode === 3 && sample.rssi3 !== null && sample.rssi3 !== undefined) {
     const distances = {
-      B1: offsetDistanceProxy(sample.rssi1, offset),
-      B2: offsetDistanceProxy(sample.rssi2, offset),
-      B3: offsetDistanceProxy(sample.rssi3, offset),
+      B1: offsetDistanceProxy(sample.rssi1, o.B1),
+      B2: offsetDistanceProxy(sample.rssi2, o.B2),
+      B3: offsetDistanceProxy(sample.rssi3, o.B3),
     };
-    const position = proportionalTrianglePosition(beaconCoords, distances);
+    const position = unconstrainedTrianglePosition(beaconCoords, distances);
+    const insideTriangle = position.insideTriangle;
     return {
-      x: position[0],
-      y: position[1],
-      gate: "OFF-B123",
-      color: "#2a9d8f",
+      x: position.x,
+      y: position.y,
+      gate: insideTriangle ? "OFF-B123" : "OFF-B123-OUT",
+      color: insideTriangle ? "#2a9d8f" : "#ea580c",
+      insideTriangle,
     };
   }
 
-  const distance1 = offsetDistanceProxy(sample.rssi1, offset);
-  const distance2 = offsetDistanceProxy(sample.rssi2, offset);
+  const distance1 = offsetDistanceProxy(sample.rssi1, o.B1);
+  const distance2 = offsetDistanceProxy(sample.rssi2, o.B2);
   const total = distance1 + distance2;
   if (total <= 0) {
     const center = layoutCenter(beaconCoords, 2);
-    return { x: center[0], y: center[1], gate: "OFF-B12", color: "#457b9d" };
+    return { x: center[0], y: center[1], gate: "OFF-B12", color: "#457b9d", insideTriangle: true };
   }
 
   const ratioFromB1 = distance1 / total;
@@ -252,5 +379,5 @@ export function estimateOffsetPosition(sample, beaconCoords, offset) {
   const y = round4(
     beaconCoords.B1[1] + (beaconCoords.B2[1] - beaconCoords.B1[1]) * ratioFromB1
   );
-  return { x, y, gate: "OFF-B12", color: "#457b9d" };
+  return { x, y, gate: "OFF-B12", color: "#457b9d", insideTriangle: true };
 }
